@@ -18,14 +18,16 @@ import type {
   TPathSegmentInfo,
   TSimplePathData,
 } from '../util/path/typedefs';
-import type {
-  FabricObjectProps,
-  SerializedObjectProps,
-  TProps,
-} from './Object/types';
+import type { FabricObjectProps, SerializedObjectProps } from './Object/types';
 import type { ObjectEvents } from '../EventTypeDefs';
-import type { TBBox, TClassProperties, TSVGReviver } from '../typedefs';
-import { cloneDeep } from '../util/internals/cloneDeep';
+import type {
+  TBBox,
+  TClassProperties,
+  TSVGReviver,
+  TOptions,
+} from '../typedefs';
+import { CENTER, LEFT, TOP } from '../constants';
+import type { CSSRules } from '../parser/typedefs';
 
 interface UniquePathProps {
   sourcePath?: string;
@@ -45,9 +47,9 @@ export interface IPathBBox extends TBBox {
 }
 
 export class Path<
-  Props extends TProps<PathProps> = Partial<PathProps>,
+  Props extends TOptions<PathProps> = Partial<PathProps>,
   SProps extends SerializedPathProps = SerializedPathProps,
-  EventSpec extends ObjectEvents = ObjectEvents
+  EventSpec extends ObjectEvents = ObjectEvents,
 > extends FabricObject<Props, SProps, EventSpec> {
   /**
    * Array of path points
@@ -62,6 +64,8 @@ export class Path<
 
   declare segmentsInfo?: TPathSegmentInfo[];
 
+  static type = 'Path';
+
   static cacheProperties = [...cacheProperties, 'path', 'fillRule'];
 
   /**
@@ -72,12 +76,15 @@ export class Path<
    */
   constructor(
     path: TComplexPathData | string,
-    { path: _, left, top, ...options }: Partial<Props> = {}
+    // todo: evaluate this spread here
+    { path: _, left, top, ...options }: Partial<Props> = {},
   ) {
-    super(options as Props);
+    super();
+    Object.assign(this, Path.ownDefaults);
+    this.setOptions(options);
     this._setPath(path || [], true);
-    typeof left === 'number' && this.set('left', left);
-    typeof top === 'number' && this.set('top', top);
+    typeof left === 'number' && this.set(LEFT, left);
+    typeof top === 'number' && this.set(TOP, top);
   }
 
   /**
@@ -107,12 +114,6 @@ export class Path<
    * @param {CanvasRenderingContext2D} ctx context to render path on
    */
   _renderPathCommands(ctx: CanvasRenderingContext2D) {
-    let subpathStartX = 0,
-      subpathStartY = 0,
-      x = 0, // current x
-      y = 0, // current y
-      controlX = 0, // current control point x
-      controlY = 0; // current control point y
     const l = -this.pathOffset.x,
       t = -this.pathOffset.y;
 
@@ -123,31 +124,21 @@ export class Path<
         command[0] // first letter
       ) {
         case 'L': // lineto, absolute
-          x = command[1];
-          y = command[2];
-          ctx.lineTo(x + l, y + t);
+          ctx.lineTo(command[1] + l, command[2] + t);
           break;
 
         case 'M': // moveTo, absolute
-          x = command[1];
-          y = command[2];
-          subpathStartX = x;
-          subpathStartY = y;
-          ctx.moveTo(x + l, y + t);
+          ctx.moveTo(command[1] + l, command[2] + t);
           break;
 
         case 'C': // bezierCurveTo, absolute
-          x = command[5];
-          y = command[6];
-          controlX = command[3];
-          controlY = command[4];
           ctx.bezierCurveTo(
             command[1] + l,
             command[2] + t,
-            controlX + l,
-            controlY + t,
-            x + l,
-            y + t
+            command[3] + l,
+            command[4] + t,
+            command[5] + l,
+            command[6] + t,
           );
           break;
 
@@ -156,17 +147,11 @@ export class Path<
             command[1] + l,
             command[2] + t,
             command[3] + l,
-            command[4] + t
+            command[4] + t,
           );
-          x = command[3];
-          y = command[4];
-          controlX = command[1];
-          controlY = command[2];
           break;
 
         case 'Z':
-          x = subpathStartX;
-          y = subpathStartY;
           ctx.closePath();
           break;
       }
@@ -199,11 +184,11 @@ export class Path<
    */
   toObject<
     T extends Omit<Props & TClassProperties<this>, keyof SProps>,
-    K extends keyof T = never
+    K extends keyof T = never,
   >(propertiesToInclude: K[] = []): Pick<T, K> & SProps {
     return {
       ...super.toObject(propertiesToInclude),
-      path: cloneDeep(this.path),
+      path: this.path.map((pathCmd) => pathCmd.slice()),
     };
   }
 
@@ -214,7 +199,7 @@ export class Path<
    */
   toDatalessObject<
     T extends Omit<Props & TClassProperties<this>, keyof SProps>,
-    K extends keyof T = never
+    K extends keyof T = never,
   >(propertiesToInclude: K[] = []): Pick<T, K> & SProps {
     const o = this.toObject<T, K>(propertiesToInclude);
     if (this.sourcePath) {
@@ -246,7 +231,7 @@ export class Path<
     const digits = config.NUM_FRACTION_DIGITS;
     return ` translate(${toFixed(-this.pathOffset.x, digits)}, ${toFixed(
       -this.pathOffset.y,
-      digits
+      digits,
     )})`;
   }
 
@@ -255,12 +240,12 @@ export class Path<
    * @param {Function} [reviver] Method for further parsing of svg representation.
    * @return {string} svg representation of an instance
    */
-  toClipPathSVG(reviver: TSVGReviver) {
+  toClipPathSVG(reviver?: TSVGReviver): string {
     const additionalTransform = this._getOffsetTransform();
     return (
       '\t' +
       this._createBaseClipPathSVGMarkup(this._toSVG(), {
-        reviver: reviver,
+        reviver,
         additionalTransform: additionalTransform,
       })
     );
@@ -271,10 +256,10 @@ export class Path<
    * @param {Function} [reviver] Method for further parsing of svg representation.
    * @return {string} svg representation of an instance
    */
-  toSVG(reviver: TSVGReviver) {
+  toSVG(reviver?: TSVGReviver): string {
     const additionalTransform = this._getOffsetTransform();
     return this._createBaseSVGMarkup(this._toSVG(), {
-      reviver: reviver,
+      reviver,
       additionalTransform: additionalTransform,
     });
   }
@@ -296,7 +281,7 @@ export class Path<
     this.set({ width, height, pathOffset });
     // using pathOffset because it match the use case.
     // if pathOffset change here we need to use left + width/2 , top + height/2
-    adjustPosition && this.setPositionByOrigin(pathOffset, 'center', 'center');
+    adjustPosition && this.setPositionByOrigin(pathOffset, CENTER, CENTER);
   }
 
   _calcBoundsFromPath(): TBBox {
@@ -314,7 +299,7 @@ export class Path<
         case 'L': // lineto, absolute
           x = command[1];
           y = command[2];
-          bounds.push(new Point(subpathStartX, subpathStartY), new Point(x, y));
+          bounds.push({ x: subpathStartX, y: subpathStartY }, { x, y });
           break;
 
         case 'M': // moveTo, absolute
@@ -334,8 +319,8 @@ export class Path<
               command[3],
               command[4],
               command[5],
-              command[6]
-            )
+              command[6],
+            ),
           );
           x = command[5];
           y = command[6];
@@ -351,8 +336,8 @@ export class Path<
               command[1],
               command[2],
               command[3],
-              command[4]
-            )
+              command[4],
+            ),
           );
           x = command[3];
           y = command[4];
@@ -377,7 +362,7 @@ export class Path<
       ...bbox,
       pathOffset: new Point(
         bbox.left + bbox.width / 2,
-        bbox.top + bbox.height / 2
+        bbox.top + bbox.height / 2,
       ),
     };
   }
@@ -397,7 +382,7 @@ export class Path<
    * @param {Object} object
    * @returns {Promise<Path>}
    */
-  static fromObject<T extends TProps<SerializedPathProps>>(object: T) {
+  static fromObject<T extends TOptions<SerializedPathProps>>(object: T) {
     return this._fromObject<Path>(object, {
       extraParam: 'path',
     });
@@ -407,13 +392,18 @@ export class Path<
    * Creates an instance of Path from an SVG <path> element
    * @static
    * @memberOf Path
-   * @param {SVGElement} element to parse
+   * @param {HTMLElement} element to parse
    * @param {Partial<PathProps>} [options] Options object
    */
-  static async fromElement(element: SVGElement, options: Partial<PathProps>) {
+  static async fromElement(
+    element: HTMLElement,
+    options: Partial<PathProps>,
+    cssRules?: CSSRules,
+  ) {
     const { d, ...parsedAttributes } = parseAttributes(
       element,
-      this.ATTRIBUTE_NAMES
+      this.ATTRIBUTE_NAMES,
+      cssRules,
     );
     return new this(d, {
       ...parsedAttributes,

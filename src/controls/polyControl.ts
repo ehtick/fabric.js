@@ -1,36 +1,37 @@
 import { Point } from '../Point';
 import { Control } from './Control';
 import type { TMat2D } from '../typedefs';
-import { iMatrix } from '../constants';
 import type { Polyline } from '../shapes/Polyline';
 import { multiplyTransformMatrices } from '../util/misc/matrix';
 import type {
+  TModificationEvents,
   TPointerEvent,
   Transform,
   TransformActionHandler,
 } from '../EventTypeDefs';
-import { getLocalPoint } from './util';
+import { wrapWithFireEvent } from './wrapWithFireEvent';
+import { sendPointToPlane } from '../util/misc/planeChange';
+import { MODIFY_POLY } from '../constants';
+
+const ACTION_NAME: TModificationEvents = MODIFY_POLY;
 
 type TTransformAnchor = Transform & { pointIndex: number };
-
-const getSize = (poly: Polyline) => {
-  return new Point(poly.width, poly.height);
-};
 
 /**
  * This function locates the controls.
  * It'll be used both for drawing and for interaction.
  */
-const factoryPolyPositionHandler = (pointIndex: number) => {
+export const createPolyPositionHandler = (pointIndex: number) => {
   return function (dim: Point, finalMatrix: TMat2D, polyObject: Polyline) {
-    const x = polyObject.points[pointIndex].x - polyObject.pathOffset.x,
-      y = polyObject.points[pointIndex].y - polyObject.pathOffset.y;
-    return new Point(x, y).transform(
-      multiplyTransformMatrices(
-        polyObject.canvas?.viewportTransform ?? iMatrix,
-        polyObject.calcTransformMatrix()
-      )
-    );
+    const { points, pathOffset } = polyObject;
+    return new Point(points[pointIndex])
+      .subtract(pathOffset)
+      .transform(
+        multiplyTransformMatrices(
+          polyObject.getViewportTransform(),
+          polyObject.calcTransformMatrix(),
+        ),
+      );
   };
 };
 
@@ -41,26 +42,21 @@ const factoryPolyPositionHandler = (pointIndex: number) => {
  * and the current position in canvas coordinate `transform.target` is a reference to the
  * current object being transformed.
  */
-const polyActionHandler = (
+export const polyActionHandler = (
   eventData: TPointerEvent,
   transform: TTransformAnchor,
   x: number,
-  y: number
+  y: number,
 ) => {
-  const poly = transform.target as Polyline,
-    pointIndex = transform.pointIndex,
-    mouseLocalPosition = getLocalPoint(transform, 'center', 'center', x, y),
-    polygonBaseSize = getSize(poly),
-    size = poly._getTransformedDimensions(),
-    sizeFactor = polygonBaseSize.divide(size),
-    adjustFlip = new Point(poly.flipX ? -1 : 1, poly.flipY ? -1 : 1);
+  const { target, pointIndex } = transform;
+  const poly = target as Polyline;
+  const mouseLocalPosition = sendPointToPlane(
+    new Point(x, y),
+    undefined,
+    poly.calcOwnMatrix(),
+  );
 
-  const finalPointPosition = mouseLocalPosition
-    .multiply(adjustFlip)
-    .multiply(sizeFactor)
-    .add(poly.pathOffset);
-
-  poly.points[pointIndex] = finalPointPosition;
+  poly.points[pointIndex] = mouseLocalPosition.add(poly.pathOffset);
   poly.setDimensions();
 
   return true;
@@ -69,54 +65,54 @@ const polyActionHandler = (
 /**
  * Keep the polygon in the same position when we change its `width`/`height`/`top`/`left`.
  */
-const anchorWrapper = (
+export const factoryPolyActionHandler = (
   pointIndex: number,
-  fn: TransformActionHandler<TTransformAnchor>
+  fn: TransformActionHandler<TTransformAnchor>,
 ) => {
   return function (
     eventData: TPointerEvent,
     transform: Transform,
     x: number,
-    y: number
+    y: number,
   ) {
     const poly = transform.target as Polyline,
-      anchorIndex = (pointIndex > 0 ? pointIndex : poly.points.length) - 1,
-      pointInParentPlane = new Point(
-        poly.points[anchorIndex].x - poly.pathOffset.x,
-        poly.points[anchorIndex].y - poly.pathOffset.y
-      ).transform(poly.calcOwnMatrix()),
-      actionPerformed = fn(eventData, { ...transform, pointIndex }, x, y),
-      polygonBaseSize = getSize(poly),
-      adjustFlip = new Point(poly.flipX ? -1 : 1, poly.flipY ? -1 : 1);
+      anchorPoint = new Point(
+        poly.points[(pointIndex > 0 ? pointIndex : poly.points.length) - 1],
+      ),
+      anchorPointInParentPlane = anchorPoint
+        .subtract(poly.pathOffset)
+        .transform(poly.calcOwnMatrix()),
+      actionPerformed = fn(eventData, { ...transform, pointIndex }, x, y);
 
-    const newPosition = new Point(
-      poly.points[anchorIndex].x,
-      poly.points[anchorIndex].y
-    )
+    const newAnchorPointInParentPlane = anchorPoint
       .subtract(poly.pathOffset)
-      .divide(polygonBaseSize)
-      .multiply(adjustFlip);
+      .transform(poly.calcOwnMatrix());
 
-    poly.setPositionByOrigin(
-      pointInParentPlane,
-      newPosition.x + 0.5,
-      newPosition.y + 0.5
-    );
+    const diff = newAnchorPointInParentPlane.subtract(anchorPointInParentPlane);
+    poly.left -= diff.x;
+    poly.top -= diff.y;
+
     return actionPerformed;
   };
 };
 
+export const createPolyActionHandler = (pointIndex: number) =>
+  wrapWithFireEvent(
+    ACTION_NAME,
+    factoryPolyActionHandler(pointIndex, polyActionHandler),
+  );
+
 export function createPolyControls(
   poly: Polyline,
-  options?: Partial<Control>
+  options?: Partial<Control>,
 ): Record<string, Control>;
 export function createPolyControls(
   numOfControls: number,
-  options?: Partial<Control>
+  options?: Partial<Control>,
 ): Record<string, Control>;
 export function createPolyControls(
   arg0: number | Polyline,
-  options: Partial<Control> = {}
+  options: Partial<Control> = {},
 ) {
   const controls = {} as Record<string, Control>;
   for (
@@ -125,9 +121,9 @@ export function createPolyControls(
     idx++
   ) {
     controls[`p${idx}`] = new Control({
-      actionName: 'modifyPoly',
-      positionHandler: factoryPolyPositionHandler(idx),
-      actionHandler: anchorWrapper(idx, polyActionHandler),
+      actionName: ACTION_NAME,
+      positionHandler: createPolyPositionHandler(idx),
+      actionHandler: createPolyActionHandler(idx),
       ...options,
     });
   }

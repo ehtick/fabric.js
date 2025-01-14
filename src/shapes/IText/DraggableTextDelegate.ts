@@ -1,4 +1,3 @@
-import type { Canvas } from '../../canvas/Canvas';
 import type {
   DragEventData,
   DropEventData,
@@ -7,9 +6,10 @@ import type {
 import { Point } from '../../Point';
 import type { IText } from './IText';
 import { setStyle } from '../../util/dom_style';
-import { cloneDeep } from '../../util/internals/cloneDeep';
+import { cloneStyles } from '../../util/internals/cloneStyles';
 import type { TextStyleDeclaration } from '../Text/StyledText';
 import { getDocumentFromElement } from '../../util/dom_misc';
+import { CHANGED, NONE } from '../../constants';
 
 /**
  * #### Dragging IText/Textbox Lifecycle
@@ -108,7 +108,7 @@ export class DraggableTextDelegate {
     }: {
       selectionStart: number;
       selectionEnd: number;
-    }
+    },
   ) {
     const target = this.target;
     const canvas = target.canvas!;
@@ -116,20 +116,19 @@ export class DraggableTextDelegate {
     const boundaries = target._getCursorBoundaries(selectionStart);
     const selectionPosition = new Point(
       boundaries.left + boundaries.leftOffset,
-      boundaries.top + boundaries.topOffset
+      boundaries.top + boundaries.topOffset,
     ).multiply(flipFactor);
     const pos = selectionPosition.transform(target.calcTransformMatrix());
-    const pointer = canvas.getPointer(e);
+    const pointer = canvas.getScenePoint(e);
     const diff = pointer.subtract(pos);
-    const enableRetinaScaling = canvas._isRetinaScaling();
     const retinaScaling = target.getCanvasRetinaScaling();
-    const bbox = target.getBoundingRect(true);
+    const bbox = target.getBoundingRect();
     const correction = pos.subtract(new Point(bbox.left, bbox.top));
     const vpt = canvas.viewportTransform;
     const offset = correction.add(diff).transform(vpt, true);
     //  prepare instance for drag image snapshot by making all non selected text invisible
     const bgc = target.backgroundColor;
-    const styles = cloneDeep(target.styles);
+    const styles = cloneStyles(target.styles);
     target.backgroundColor = '';
     const styleOverride = {
       stroke: 'transparent',
@@ -140,7 +139,7 @@ export class DraggableTextDelegate {
     target.setSelectionStyles(styleOverride, selectionEnd, target.text.length);
     target.dirty = true;
     const dragImage = target.toCanvasElement({
-      enableRetinaScaling,
+      enableRetinaScaling: canvas.enableRetinaScaling,
       viewportTransform: true,
     });
     // restore values
@@ -151,7 +150,7 @@ export class DraggableTextDelegate {
     setStyle(dragImage, {
       position: 'fixed',
       left: `${-dragImage.width}px`,
-      border: 'none',
+      border: NONE,
       width: `${dragImage.width / retinaScaling}px`,
       height: `${dragImage.height / retinaScaling}px`,
     });
@@ -160,7 +159,7 @@ export class DraggableTextDelegate {
       dragImage.remove();
     };
     getDocumentFromElement(
-      (e.target || this.target.hiddenTextarea)! as HTMLElement
+      (e.target || this.target.hiddenTextarea)! as HTMLElement,
     ).body.appendChild(dragImage);
     e.dataTransfer?.setDragImage(dragImage, offset.x, offset.y);
   }
@@ -189,9 +188,9 @@ export class DraggableTextDelegate {
           styles: target.getSelectionStyles(
             selection.selectionStart,
             selection.selectionEnd,
-            true
+            true,
           ),
-        })
+        }),
       );
       e.dataTransfer.effectAllowed = 'copyMove';
       this.setDragImage(e, data);
@@ -205,7 +204,11 @@ export class DraggableTextDelegate {
    * @returns {boolean} determines whether {@link target} should/shouldn't become a drop target
    */
   canDrop(e: DragEvent): boolean {
-    if (this.target.editable && !this.target.__corner && !e.defaultPrevented) {
+    if (
+      this.target.editable &&
+      !this.target.getActiveControl() &&
+      !e.defaultPrevented
+    ) {
       if (this.isActive() && this.__dragStartSelection) {
         //  drag source trying to drop over itself
         //  allow dropping only outside of drag start selection
@@ -313,16 +316,16 @@ export class DraggableTextDelegate {
       target.enterEditing(e);
       target.selectionStart = Math.min(
         insertAt + selectionStartOffset,
-        target._text.length
+        target._text.length,
       );
       target.selectionEnd = Math.min(
         target.selectionStart + insert.length,
-        target._text.length
+        target._text.length,
       );
       target.hiddenTextarea!.value = target.text;
       target._updateTextarea();
       target.hiddenTextarea!.focus();
-      target.fire('changed', {
+      target.fire(CHANGED, {
         index: insertAt + selectionStartOffset,
         action: 'drop',
       });
@@ -345,8 +348,8 @@ export class DraggableTextDelegate {
         const target = this.target;
         const canvas = this.target.canvas!;
         const { selectionStart, selectionEnd } = this.__dragStartSelection;
-        const dropEffect = e.dataTransfer?.dropEffect || 'none';
-        if (dropEffect === 'none') {
+        const dropEffect = e.dataTransfer?.dropEffect || NONE;
+        if (dropEffect === NONE) {
           // pointer is back over selection
           target.selectionStart = selectionStart;
           target.selectionEnd = selectionEnd;
@@ -360,7 +363,7 @@ export class DraggableTextDelegate {
             target.hiddenTextarea &&
               (target.hiddenTextarea.value = target.text);
             target._updateTextarea();
-            target.fire('changed', {
+            target.fire(CHANGED, {
               index: selectionStart,
               action: 'dragend',
             });

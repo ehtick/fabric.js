@@ -1,10 +1,52 @@
 import type { ControlRenderingStyleOverride } from '../controls/controlRendering';
 import { classRegistry } from '../ClassRegistry';
+import type { GroupProps } from './Group';
 import { Group } from './Group';
 import type { FabricObject } from './Object/FabricObject';
+import {
+  LAYOUT_TYPE_ADDED,
+  LAYOUT_TYPE_REMOVED,
+} from '../LayoutManager/constants';
+import type { TClassProperties } from '../typedefs';
+import { log } from '../util/internals/console';
+import { ActiveSelectionLayoutManager } from '../LayoutManager/ActiveSelectionLayoutManager';
 
+export type MultiSelectionStacking = 'canvas-stacking' | 'selection-order';
+
+export interface ActiveSelectionOptions extends GroupProps {
+  multiSelectionStacking: MultiSelectionStacking;
+}
+
+const activeSelectionDefaultValues: Partial<TClassProperties<ActiveSelection>> =
+  {
+    multiSelectionStacking: 'canvas-stacking',
+  };
+
+/**
+ * Used by Canvas to manage selection.
+ *
+ * @example
+ * class MyActiveSelection extends ActiveSelection {
+ *   ...
+ * }
+ *
+ * // override the default `ActiveSelection` class
+ * classRegistry.setClass(MyActiveSelection)
+ */
 export class ActiveSelection extends Group {
-  declare _objects: FabricObject[];
+  static type = 'ActiveSelection';
+
+  static ownDefaults: Record<string, any> = activeSelectionDefaultValues;
+
+  static getDefaults(): Record<string, any> {
+    return { ...super.getDefaults(), ...ActiveSelection.ownDefaults };
+  }
+
+  /**
+   * The ActiveSelection needs to use the ActiveSelectionLayoutManager
+   * or selections on interactive groups may be broken
+   */
+  declare layoutManager: ActiveSelectionLayoutManager;
 
   /**
    * controls how selected objects are added during a multiselection event
@@ -13,16 +55,21 @@ export class ActiveSelection extends Group {
    * meaning that the stack is ordered by the order in which objects were selected
    * @default `canvas-stacking`
    */
-  multiSelectionStacking: 'canvas-stacking' | 'selection-order' =
-    'canvas-stacking';
+  declare multiSelectionStacking: MultiSelectionStacking;
 
   constructor(
-    objects?: FabricObject[],
-    options?: any,
-    objectsRelativeToGroup?: boolean
+    objects: FabricObject[] = [],
+    options: Partial<ActiveSelectionOptions> = {},
   ) {
-    super(objects, options, objectsRelativeToGroup);
-    this.setCoords();
+    super();
+    Object.assign(this, ActiveSelection.ownDefaults);
+    this.setOptions(options);
+    const { left, top, layoutManager } = options;
+    this.groupInit(objects, {
+      left,
+      top,
+      layoutManager: layoutManager ?? new ActiveSelectionLayoutManager(),
+    });
   }
 
   /**
@@ -63,20 +110,49 @@ export class ActiveSelection extends Group {
   }
 
   /**
+   * @override block ancestors/descendants of selected objects from being selected to prevent a circular object tree
+   */
+  canEnterGroup(object: FabricObject) {
+    if (
+      this.getObjects().some(
+        (o) => o.isDescendantOf(object) || object.isDescendantOf(o),
+      )
+    ) {
+      //  prevent circular object tree
+      log(
+        'error',
+        'ActiveSelection: circular object trees are not supported, this call has no effect',
+      );
+      return false;
+    }
+
+    return super.canEnterGroup(object);
+  }
+
+  /**
+   * Change an object so that it can be part of an active selection.
+   * this method is called by multiselectAdd from canvas code.
    * @private
    * @param {FabricObject} object
    * @param {boolean} [removeParentTransform] true if object is in canvas coordinate plane
-   * @returns {boolean} true if object entered group
    */
   enterGroup(object: FabricObject, removeParentTransform?: boolean) {
-    if (object.group) {
-      //  save ref to group for later in order to return to it
-      const parent = object.group;
-      parent._exitGroup(object);
-      object.__owningGroup = parent;
+    // This condition check that the object has currently a group, and the group
+    // is also its parent, meaning that is not in an active selection, but is
+    // in a normal group.
+    if (object.parent && object.parent === object.group) {
+      // Disconnect the object from the group functionalities, but keep the ref parent intact
+      // for later re-enter
+      object.parent._exitGroup(object);
+      // in this case the object is probably inside an active selection.
+    } else if (object.group && object.parent !== object.group) {
+      // in this case group.remove will also clear the old parent reference.
+      object.group.remove(object);
     }
+    // enter the active selection from a render perspective
+    // the object will be in the objects array of both the ActiveSelection and the Group
+    // but referenced in the group's _activeObjects so that it won't be rendered twice.
     this._enterGroup(object, removeParentTransform);
-    return true;
   }
 
   /**
@@ -87,12 +163,8 @@ export class ActiveSelection extends Group {
    */
   exitGroup(object: FabricObject, removeParentTransform?: boolean) {
     this._exitGroup(object, removeParentTransform);
-    const parent = object.__owningGroup;
-    if (parent) {
-      //  return to owning group
-      parent._enterGroup(object, true);
-      delete object.__owningGroup;
-    }
+    // return to parent
+    object.parent && object.parent._enterGroup(object, true);
   }
 
   /**
@@ -102,16 +174,15 @@ export class ActiveSelection extends Group {
    */
   _onAfterObjectsChange(type: 'added' | 'removed', targets: FabricObject[]) {
     super._onAfterObjectsChange(type, targets);
-    const groups: Group[] = [];
+    const groups = new Set<Group>();
     targets.forEach((object) => {
-      object.group &&
-        !groups.includes(object.group) &&
-        groups.push(object.group);
+      const { parent } = object;
+      parent && groups.add(parent);
     });
-    if (type === 'removed') {
+    if (type === LAYOUT_TYPE_REMOVED) {
       //  invalidate groups' layout and mark as dirty
       groups.forEach((group) => {
-        group._onAfterObjectsChange('added', targets);
+        group._onAfterObjectsChange(LAYOUT_TYPE_ADDED, targets);
       });
     } else {
       //  mark groups as dirty
@@ -122,9 +193,7 @@ export class ActiveSelection extends Group {
   }
 
   /**
-   * If returns true, deselection is cancelled.
-   * @since 2.0.0
-   * @return {Boolean} [cancel]
+   * @override remove all objects
    */
   onDeselect() {
     this.removeAll();
@@ -140,11 +209,7 @@ export class ActiveSelection extends Group {
   }
 
   /**
-   * Decide if the object should cache or not. Create its own cache level
-   * objectCaching is a global flag, wins over everything
-   * needsItsOwnCache should be used when the object drawing method requires
-   * a cache step. None of the fabric classes requires it.
-   * Generally you do not cache objects in groups because the group outside is cached.
+   * Decide if the object should cache or not. The Active selection never caches
    * @return {Boolean}
    */
   shouldCache() {
@@ -168,11 +233,10 @@ export class ActiveSelection extends Group {
   _renderControls(
     ctx: CanvasRenderingContext2D,
     styleOverride?: ControlRenderingStyleOverride,
-    childrenOverride?: ControlRenderingStyleOverride
+    childrenOverride?: ControlRenderingStyleOverride,
   ) {
     ctx.save();
     ctx.globalAlpha = this.isMoving ? this.borderOpacityWhenMoving : 1;
-    super._renderControls(ctx, styleOverride);
     const options = {
       hasControls: false,
       ...childrenOverride,
@@ -181,6 +245,7 @@ export class ActiveSelection extends Group {
     for (let i = 0; i < this._objects.length; i++) {
       this._objects[i]._renderControls(ctx, options);
     }
+    super._renderControls(ctx, styleOverride);
     ctx.restore();
   }
 }

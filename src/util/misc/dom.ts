@@ -1,5 +1,6 @@
 import { getFabricDocument } from '../../env';
-import type { ImageFormat } from '../../typedefs';
+import type { ImageFormat, TSize } from '../../typedefs';
+import { FabricError } from '../internals/console';
 /**
  * Creates canvas element
  * @return {CanvasElement} initialized canvas element
@@ -7,7 +8,7 @@ import type { ImageFormat } from '../../typedefs';
 export const createCanvasElement = (): HTMLCanvasElement => {
   const element = getFabricDocument().createElement('canvas');
   if (!element || typeof element.getContext === 'undefined') {
-    throw new Error('Failed to create `canvas` element');
+    throw new FabricError('Failed to create `canvas` element');
   }
   return element;
 };
@@ -25,12 +26,19 @@ export const createImage = (): HTMLImageElement =>
  * @return {CanvasElement} initialized canvas element
  */
 export const copyCanvasElement = (
-  canvas: HTMLCanvasElement
+  canvas: HTMLCanvasElement,
+): HTMLCanvasElement => {
+  const newCanvas = createCanvasElementFor(canvas);
+  newCanvas.getContext('2d')?.drawImage(canvas, 0, 0);
+  return newCanvas;
+};
+
+export const createCanvasElementFor = (
+  canvas: HTMLCanvasElement | ImageData | HTMLImageElement | TSize,
 ): HTMLCanvasElement => {
   const newCanvas = createCanvasElement();
   newCanvas.width = canvas.width;
   newCanvas.height = canvas.height;
-  newCanvas.getContext('2d')?.drawImage(canvas, 0, 0);
   return newCanvas;
 };
 
@@ -45,11 +53,11 @@ export const copyCanvasElement = (
 export const toDataURL = (
   canvasEl: HTMLCanvasElement,
   format: ImageFormat,
-  quality: number
+  quality: number,
 ) => canvasEl.toDataURL(`image/${format}`, quality);
 
 export const isHTMLCanvas = (
-  canvas: HTMLCanvasElement | string
+  canvas?: HTMLCanvasElement | string,
 ): canvas is HTMLCanvasElement => {
   return !!canvas && (canvas as HTMLCanvasElement).getContext !== undefined;
 };

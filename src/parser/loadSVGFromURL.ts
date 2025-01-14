@@ -1,4 +1,4 @@
-import { request } from '../util/dom_request';
+import { request } from '../util/internals/dom_request';
 import { parseSVGDocument, createEmptyResponse } from './parseSVGDocument';
 import type { SVGParsingOutput, TSvgReviverCallback } from './typedefs';
 import type { LoadImageOptions } from '../util/misc/objectEnlive';
@@ -21,20 +21,19 @@ import type { LoadImageOptions } from '../util/misc/objectEnlive';
 export function loadSVGFromURL(
   url: string,
   reviver?: TSvgReviverCallback,
-  options: LoadImageOptions = {}
+  options: LoadImageOptions = {},
 ): Promise<SVGParsingOutput> {
   // need to handle error properly
-  return new Promise<HTMLElement>((resolve, reject) => {
+  return new Promise<Document>((resolve, reject) => {
     const onComplete = (r: XMLHttpRequest) => {
       const xml = r.responseXML;
-      if (xml && xml.documentElement) {
-        resolve(xml.documentElement);
+      if (xml) {
+        resolve(xml);
       }
       reject();
     };
 
     request(url.replace(/^\n\s*/, '').trim(), {
-      method: 'get',
       onComplete,
       signal: options.signal,
     });

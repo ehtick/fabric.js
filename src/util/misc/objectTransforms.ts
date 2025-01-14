@@ -1,10 +1,9 @@
 import { Point } from '../../Point';
+import { CENTER } from '../../constants';
 import type { FabricObject } from '../../shapes/Object/Object';
 import type { TMat2D } from '../../typedefs';
 import { makeBoundingBoxFromPoints } from './boundingBoxFromPoints';
-import type { TScaleMatrixArgs } from './matrix';
 import {
-  calcDimensionsMatrix,
   invertTransform,
   multiplyTransformMatrices,
   qrDecompose,
@@ -23,12 +22,12 @@ import {
  */
 export const removeTransformFromObject = (
   object: FabricObject,
-  transform: TMat2D
+  transform: TMat2D,
 ) => {
   const inverted = invertTransform(transform),
     finalTransform = multiplyTransformMatrices(
       inverted,
-      object.calcOwnMatrix()
+      object.calcOwnMatrix(),
     );
   applyTransformToObject(object, finalTransform);
 };
@@ -44,7 +43,7 @@ export const removeTransformFromObject = (
 export const addTransformToObject = (object: FabricObject, transform: TMat2D) =>
   applyTransformToObject(
     object,
-    multiplyTransformMatrices(transform, object.calcOwnMatrix())
+    multiplyTransformMatrices(transform, object.calcOwnMatrix()),
   );
 
 /**
@@ -54,7 +53,7 @@ export const addTransformToObject = (object: FabricObject, transform: TMat2D) =>
  */
 export const applyTransformToObject = (
   object: FabricObject,
-  transform: TMat2D
+  transform: TMat2D,
 ) => {
   const { translateX, translateY, scaleX, scaleY, ...otherOptions } =
       qrDecompose(transform),
@@ -63,7 +62,7 @@ export const applyTransformToObject = (
   object.flipY = false;
   Object.assign(object, otherOptions);
   object.set({ scaleX, scaleY });
-  object.setPositionByOrigin(center, 'center', 'center');
+  object.setPositionByOrigin(center, CENTER, CENTER);
 };
 /**
  * reset an object transform state to neutral. Top and left are not accounted for
@@ -98,32 +97,26 @@ export const saveObjectTransform = (target: FabricObject) => ({
 
 /**
  * given a width and height, return the size of the bounding box
- * that can contains the box with width/height with applied transform
- * described in options.
+ * that can contains the box with width/height with applied transform.
  * Use to calculate the boxes around objects for controls.
  * @param {Number} width
  * @param {Number} height
- * @param {Object} options
- * @param {Number} options.scaleX
- * @param {Number} options.scaleY
- * @param {Number} options.skewX
- * @param {Number} options.skewY
+ * @param {TMat2D} t
  * @returns {Point} size
  */
 export const sizeAfterTransform = (
   width: number,
   height: number,
-  options: TScaleMatrixArgs
+  t: TMat2D,
 ) => {
   const dimX = width / 2,
     dimY = height / 2,
-    transformMatrix = calcDimensionsMatrix(options),
     points = [
       new Point(-dimX, -dimY),
       new Point(dimX, -dimY),
       new Point(-dimX, dimY),
       new Point(dimX, dimY),
-    ].map((p) => p.transform(transformMatrix)),
+    ].map((p) => p.transform(t)),
     bbox = makeBoundingBoxFromPoints(points);
   return new Point(bbox.width, bbox.height);
 };

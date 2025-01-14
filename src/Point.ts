@@ -17,7 +17,7 @@ export class Point implements XY {
 
   constructor();
   constructor(x: number, y: number);
-  constructor(point: XY);
+  constructor(point?: XY);
   constructor(arg0: number | XY = 0, y = 0) {
     if (typeof arg0 === 'object') {
       this.x = arg0.x;
@@ -234,7 +234,7 @@ export class Point implements XY {
     t = Math.max(Math.min(1, t), 0);
     return new Point(
       this.x + (that.x - this.x) * t,
-      this.y + (that.y - this.y) * t
+      this.y + (that.y - this.y) * t,
     );
   }
 
@@ -356,7 +356,7 @@ export class Point implements XY {
    * @param {TRadian} radians The radians of the angle for the rotation
    * @return {Point} The new rotated point
    */
-  rotate(radians: TRadian, origin: XY = originZero): Point {
+  rotate(radians: TRadian, origin: XY = ZERO): Point {
     // TODO benchmark and verify the add and subtract how much cost
     // and then in case early return if no origin is passed
     const sinus = sin(radians),
@@ -364,7 +364,7 @@ export class Point implements XY {
     const p = this.subtract(origin);
     const rotated = new Point(
       p.x * cosinus - p.y * sinus,
-      p.x * sinus + p.y * cosinus
+      p.x * sinus + p.y * cosinus,
     );
     return rotated.add(origin);
   }
@@ -380,9 +380,9 @@ export class Point implements XY {
   transform(t: TMat2D, ignoreOffset = false): Point {
     return new Point(
       t[0] * this.x + t[2] * this.y + (ignoreOffset ? 0 : t[4]),
-      t[1] * this.x + t[3] * this.y + (ignoreOffset ? 0 : t[5])
+      t[1] * this.x + t[3] * this.y + (ignoreOffset ? 0 : t[5]),
     );
   }
 }
 
-const originZero = new Point(0, 0);
+export const ZERO = new Point(0, 0);

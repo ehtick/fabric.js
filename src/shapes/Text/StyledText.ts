@@ -1,31 +1,36 @@
 import type { ObjectEvents } from '../../EventTypeDefs';
-import type {
-  FabricObjectProps,
-  SerializedObjectProps,
-  TProps,
-} from '../Object/types';
+import type { FabricObjectProps, SerializedObjectProps } from '../Object/types';
+import type { TOptions } from '../../typedefs';
 import { FabricObject } from '../Object/FabricObject';
 import { styleProperties } from './constants';
+import type { StylePropertiesType } from './constants';
+import type { FabricText } from './Text';
+import { pick } from '../../util';
+import { pickBy } from '../../util/misc/pick';
 
-// @TODO properly type this
-export type TextStyleDeclaration = Record<string, any>;
+export type CompleteTextStyleDeclaration = Pick<
+  FabricText,
+  StylePropertiesType
+>;
+
+export type TextStyleDeclaration = Partial<CompleteTextStyleDeclaration>;
 
 export type TextStyle = {
   [line: number | string]: { [char: number | string]: TextStyleDeclaration };
 };
 
 export abstract class StyledText<
-  Props extends TProps<FabricObjectProps> = Partial<FabricObjectProps>,
+  Props extends TOptions<FabricObjectProps> = Partial<FabricObjectProps>,
   SProps extends SerializedObjectProps = SerializedObjectProps,
-  EventSpec extends ObjectEvents = ObjectEvents
+  EventSpec extends ObjectEvents = ObjectEvents,
 > extends FabricObject<Props, SProps, EventSpec> {
   declare abstract styles: TextStyle;
   protected declare abstract _textLines: string[][];
   protected declare _forceClearCache: boolean;
-  static _styleProperties = styleProperties;
+  static _styleProperties: Readonly<StylePropertiesType[]> = styleProperties;
   abstract get2DCursorLocation(
     selectionStart: number,
-    skipWrapping?: boolean
+    skipWrapping?: boolean,
   ): { charIndex: number; lineIndex: number };
 
   /**
@@ -62,8 +67,8 @@ export abstract class StyledText<
    * @param {Number} lineIndex to check the style on
    * @return {Boolean}
    */
-  styleHas(property: string, lineIndex?: number): boolean {
-    if (!this.styles || !property || property === '') {
+  styleHas(property: keyof TextStyleDeclaration, lineIndex?: number): boolean {
+    if (!this.styles) {
       return false;
     }
     if (typeof lineIndex !== 'undefined' && !this.styles[lineIndex]) {
@@ -92,11 +97,9 @@ export abstract class StyledText<
    * has no other properties, then it is also deleted.  Finally,
    * if the line containing that character has no other characters
    * then it also is deleted.
-   *
-   * @param {string} property The property to compare between characters and text.
    */
-  cleanStyle(property: string) {
-    if (!this.styles || !property || property === '') {
+  cleanStyle(property: keyof TextStyleDeclaration) {
+    if (!this.styles) {
       return false;
     }
     const obj = this.styles;
@@ -108,12 +111,8 @@ export abstract class StyledText<
     for (const p1 in obj) {
       letterCount = 0;
       for (const p2 in obj[p1]) {
-        const styleObject = obj[p1][p2],
-          // TODO: this shouldn't be necessary anymore with modern browsers
-          stylePropertyHasBeenSet = Object.prototype.hasOwnProperty.call(
-            styleObject,
-            property
-          );
+        const styleObject = obj[p1][p2] || {},
+          stylePropertyHasBeenSet = styleObject[property] !== undefined;
 
         stylesCount++;
 
@@ -148,7 +147,7 @@ export abstract class StyledText<
       graphemeCount += this._textLines[i].length;
     }
     if (allStyleObjectPropertiesMatch && stylesCount === graphemeCount) {
-      this[property as keyof this] = stylePropertyValue;
+      this[property as keyof this] = stylePropertyValue as any;
       this.removeStyle(property);
     }
   }
@@ -160,8 +159,8 @@ export abstract class StyledText<
    *
    * @param {String} props The property to remove from character styles.
    */
-  removeStyle(property: string) {
-    if (!this.styles || !property || property === '') {
+  removeStyle(property: keyof TextStyleDeclaration) {
+    if (!this.styles) {
       return;
     }
     const obj = this.styles;
@@ -180,21 +179,25 @@ export abstract class StyledText<
     }
   }
 
-  private _extendStyles(index: number, styles: TextStyleDeclaration) {
+  private _extendStyles(index: number, style: TextStyleDeclaration): void {
     const { lineIndex, charIndex } = this.get2DCursorLocation(index);
 
     if (!this._getLineStyle(lineIndex)) {
       this._setLineStyle(lineIndex);
     }
 
-    if (!this._getStyleDeclaration(lineIndex, charIndex)) {
-      this._setStyleDeclaration(lineIndex, charIndex, {});
-    }
-
-    return Object.assign(
-      this._getStyleDeclaration(lineIndex, charIndex) || {},
-      styles
+    const newStyle = pickBy(
+      {
+        // first create a new object that is a merge of existing and new
+        ...this._getStyleDeclaration(lineIndex, charIndex),
+        ...style,
+        // use the predicate to discard undefined values
+      },
+      (value) => value !== undefined,
     );
+
+    // finally assign to the old position the new style
+    this._setStyleDeclaration(lineIndex, charIndex, newStyle);
   }
 
   /**
@@ -207,8 +210,8 @@ export abstract class StyledText<
   getSelectionStyles(
     startIndex: number,
     endIndex?: number,
-    complete?: boolean
-  ) {
+    complete?: boolean,
+  ): TextStyleDeclaration[] {
     const styles: TextStyleDeclaration[] = [];
     for (let i = startIndex; i < (endIndex || startIndex); i++) {
       styles.push(this.getStyleAtPosition(i, complete));
@@ -225,11 +228,9 @@ export abstract class StyledText<
    */
   getStyleAtPosition(position: number, complete?: boolean) {
     const { lineIndex, charIndex } = this.get2DCursorLocation(position);
-    return (
-      (complete
-        ? this.getCompleteStyleDeclaration(lineIndex, charIndex)
-        : this._getStyleDeclaration(lineIndex, charIndex)) || {}
-    );
+    return complete
+      ? this.getCompleteStyleDeclaration(lineIndex, charIndex)
+      : this._getStyleDeclaration(lineIndex, charIndex);
   }
 
   /**
@@ -247,17 +248,22 @@ export abstract class StyledText<
   }
 
   /**
-   * get the reference, not a clone, of the style object for a given character
+   * Get a reference, not a clone, to the style object for a given character,
+   * if no style is set for a line or char, return a new empty object.
+   * This is tricky and confusing because when you get an empty object you can't
+   * determine if it is a reference or a new one.
+   * @TODO this should always return a reference or always a clone or undefined when necessary.
+   * @protected
    * @param {Number} lineIndex
    * @param {Number} charIndex
-   * @return {Object} style object
+   * @return {TextStyleDeclaration} a style object reference to the existing one or a new empty object when undefined
    */
-  _getStyleDeclaration(lineIndex: number, charIndex: number) {
+  _getStyleDeclaration(
+    lineIndex: number,
+    charIndex: number,
+  ): TextStyleDeclaration {
     const lineStyle = this.styles && this.styles[lineIndex];
-    if (!lineStyle) {
-      return null;
-    }
-    return lineStyle[charIndex];
+    return lineStyle ? lineStyle[charIndex] ?? {} : {};
   }
 
   /**
@@ -267,18 +273,18 @@ export abstract class StyledText<
    * @param {Number} charIndex position of the character on the line
    * @return {Object} style object
    */
-  getCompleteStyleDeclaration(lineIndex: number, charIndex: number) {
-    const style = this._getStyleDeclaration(lineIndex, charIndex) || {},
-      styleObject: TextStyleDeclaration = {},
-      styleProps = (this.constructor as typeof StyledText)._styleProperties;
-    for (let i = 0; i < styleProps.length; i++) {
-      const prop = styleProps[i];
-      styleObject[prop] =
-        typeof style[prop] === 'undefined'
-          ? this[prop as keyof this]
-          : style[prop];
-    }
-    return styleObject;
+  getCompleteStyleDeclaration(
+    lineIndex: number,
+    charIndex: number,
+  ): CompleteTextStyleDeclaration {
+    return {
+      ...pick(
+        this,
+        (this.constructor as typeof StyledText)
+          ._styleProperties as (keyof this)[],
+      ),
+      ...this._getStyleDeclaration(lineIndex, charIndex),
+    } as CompleteTextStyleDeclaration;
   }
 
   /**
@@ -290,7 +296,7 @@ export abstract class StyledText<
   protected _setStyleDeclaration(
     lineIndex: number,
     charIndex: number,
-    style: object
+    style: object,
   ) {
     this.styles[lineIndex][charIndex] = style;
   }
