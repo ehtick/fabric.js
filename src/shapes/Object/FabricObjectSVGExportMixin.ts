@@ -1,7 +1,9 @@
-// @ts-nocheck
 import type { TSVGReviver } from '../../typedefs';
 import { uid } from '../../util/internals/uid';
 import { colorPropToSVG, matrixToSVG } from '../../util/misc/svgParsing';
+import { FILL, NONE, STROKE } from '../../constants';
+import type { FabricObject } from './FabricObject';
+import { isFiller } from '../../util/typeAssertions';
 
 export class FabricObjectSVGExportMixin {
   /**
@@ -16,12 +18,15 @@ export class FabricObjectSVGExportMixin {
    * @param {Boolean} skipShadow a boolean to skip shadow filter output
    * @return {String}
    */
-  getSvgStyles(skipShadow?: boolean) {
+  getSvgStyles(
+    this: FabricObjectSVGExportMixin & FabricObject,
+    skipShadow?: boolean,
+  ) {
     const fillRule = this.fillRule ? this.fillRule : 'nonzero',
       strokeWidth = this.strokeWidth ? this.strokeWidth : '0',
       strokeDashArray = this.strokeDashArray
         ? this.strokeDashArray.join(' ')
-        : 'none',
+        : NONE,
       strokeDashOffset = this.strokeDashOffset ? this.strokeDashOffset : '0',
       strokeLineCap = this.strokeLineCap ? this.strokeLineCap : 'butt',
       strokeLineJoin = this.strokeLineJoin ? this.strokeLineJoin : 'miter',
@@ -29,8 +34,8 @@ export class FabricObjectSVGExportMixin {
       opacity = typeof this.opacity !== 'undefined' ? this.opacity : '1',
       visibility = this.visible ? '' : ' visibility: hidden;',
       filter = skipShadow ? '' : this.getSvgFilter(),
-      fill = colorPropToSVG('fill', this.fill),
-      stroke = colorPropToSVG('stroke', this.stroke);
+      fill = colorPropToSVG(FILL, this.fill),
+      stroke = colorPropToSVG(STROKE, this.stroke);
 
     return [
       stroke,
@@ -65,68 +70,10 @@ export class FabricObjectSVGExportMixin {
   }
 
   /**
-   * Returns styles-string for svg-export
-   * @param {Object} style the object from which to retrieve style properties
-   * @param {Boolean} useWhiteSpace a boolean to include an additional attribute in the style.
-   * @return {String}
-   */
-  getSvgSpanStyles(style, useWhiteSpace?: boolean) {
-    const term = '; ',
-      fontFamily = style.fontFamily
-        ? `font-family: ${
-            style.fontFamily.indexOf("'") === -1 &&
-            style.fontFamily.indexOf('"') === -1
-              ? `'${style.fontFamily}'`
-              : style.fontFamily
-          }${term}`
-        : '',
-      strokeWidth = style.strokeWidth
-        ? `stroke-width: ${style.strokeWidth}${term}`
-        : '',
-      fontSize = style.fontSize ? `font-size: ${style.fontSize}px${term}` : '',
-      fontStyle = style.fontStyle
-        ? `font-style: ${style.fontStyle}${term}`
-        : '',
-      fontWeight = style.fontWeight
-        ? `font-weight: ${style.fontWeight}${term}`
-        : '',
-      fill = style.fill ? colorPropToSVG('fill', style.fill) : '',
-      stroke = style.stroke ? colorPropToSVG('stroke', style.stroke) : '',
-      textDecoration = this.getSvgTextDecoration(style),
-      deltaY = style.deltaY ? `baseline-shift: ${-style.deltaY}; ` : '';
-
-    return [
-      stroke,
-      strokeWidth,
-      fontFamily,
-      fontSize,
-      fontStyle,
-      fontWeight,
-      textDecoration
-        ? `text-decoration: ${textDecoration}${term}`
-        : textDecoration,
-      fill,
-      deltaY,
-      useWhiteSpace ? 'white-space: pre; ' : '',
-    ].join('');
-  }
-
-  /**
-   * Returns text-decoration property for svg-export
-   * @param {Object} style the object from which to retrieve style properties
-   * @return {String}
-   */
-  getSvgTextDecoration(style) {
-    return ['overline', 'underline', 'line-through']
-      .filter((decoration) => style[decoration.replace('-', '')])
-      .join(' ');
-  }
-
-  /**
    * Returns filter for svg shadow
    * @return {String}
    */
-  getSvgFilter() {
+  getSvgFilter(this: FabricObjectSVGExportMixin & FabricObject) {
     return this.shadow ? `filter: url(#SVGID_${this.shadow.id});` : '';
   }
 
@@ -134,10 +81,17 @@ export class FabricObjectSVGExportMixin {
    * Returns id attribute for svg output
    * @return {String}
    */
-  getSvgCommons() {
+  getSvgCommons(
+    this: FabricObjectSVGExportMixin & FabricObject & { id?: string },
+  ) {
     return [
       this.id ? `id="${this.id}" ` : '',
-      this.clipPath ? `clip-path="url(#${this.clipPath.clipPathId})" ` : '',
+      this.clipPath
+        ? `clip-path="url(#${
+            (this.clipPath as FabricObjectSVGExportMixin & FabricObject)
+              .clipPathId
+          })" `
+        : '',
     ].join('');
   }
 
@@ -146,7 +100,11 @@ export class FabricObjectSVGExportMixin {
    * @param {Boolean} use the full transform or the single object one.
    * @return {String}
    */
-  getSvgTransform(full?: boolean, additionalTransform = '') {
+  getSvgTransform(
+    this: FabricObjectSVGExportMixin & FabricObject,
+    full?: boolean,
+    additionalTransform = '',
+  ) {
     const transform = full ? this.calcTransformMatrix() : this.calcOwnMatrix(),
       svgTransform = `transform="${matrixToSVG(transform)}`;
     return `${svgTransform}${additionalTransform}" `;
@@ -154,10 +112,24 @@ export class FabricObjectSVGExportMixin {
 
   /**
    * Returns svg representation of an instance
+   * This function is implemented in each subclass
+   * This is just because typescript otherwise cryies all the time
+   * @return {Array} an array of strings with the specific svg representation
+   * of the instance
+   */
+  _toSVG(_reviver?: TSVGReviver): string[] {
+    return [''];
+  }
+
+  /**
+   * Returns svg representation of an instance
    * @param {TSVGReviver} [reviver] Method for further parsing of svg representation.
    * @return {String} svg representation of an instance
    */
-  toSVG(reviver?: TSVGReviver) {
+  toSVG(
+    this: FabricObjectSVGExportMixin & FabricObject,
+    reviver?: TSVGReviver,
+  ) {
     return this._createBaseSVGMarkup(this._toSVG(reviver), {
       reviver,
     });
@@ -168,7 +140,10 @@ export class FabricObjectSVGExportMixin {
    * @param {TSVGReviver} [reviver] Method for further parsing of svg representation.
    * @return {String} svg representation of an instance
    */
-  toClipPathSVG(reviver?: TSVGReviver) {
+  toClipPathSVG(
+    this: FabricObjectSVGExportMixin & FabricObject,
+    reviver?: TSVGReviver,
+  ) {
     return (
       '\t' +
       this._createBaseClipPathSVGMarkup(this._toSVG(reviver), {
@@ -181,11 +156,12 @@ export class FabricObjectSVGExportMixin {
    * @private
    */
   _createBaseClipPathSVGMarkup(
+    this: FabricObjectSVGExportMixin & FabricObject,
     objectMarkup: string[],
     {
       reviver,
       additionalTransform = '',
-    }: { reviver?: TSVGReviver; additionalTransform?: string } = {}
+    }: { reviver?: TSVGReviver; additionalTransform?: string } = {},
   ) {
     const commonPieces = [
         this.getSvgTransform(true, additionalTransform),
@@ -201,6 +177,7 @@ export class FabricObjectSVGExportMixin {
    * @private
    */
   _createBaseSVGMarkup(
+    this: FabricObjectSVGExportMixin & FabricObject,
     objectMarkup: string[],
     {
       noStyle,
@@ -212,11 +189,11 @@ export class FabricObjectSVGExportMixin {
       reviver?: TSVGReviver;
       withShadow?: boolean;
       additionalTransform?: string;
-    } = {}
-  ) {
+    } = {},
+  ): string {
     const styleInfo = noStyle ? '' : `style="${this.getSvgStyles()}" `,
       shadowInfo = withShadow ? `style="${this.getSvgFilter()}" ` : '',
-      clipPath = this.clipPath,
+      clipPath = this.clipPath as FabricObjectSVGExportMixin & FabricObject,
       vectorEffect = this.strokeUniform
         ? 'vector-effect="non-scaling-stroke" '
         : '',
@@ -241,7 +218,7 @@ export class FabricObjectSVGExportMixin {
       '<g ',
       this.getSvgTransform(false),
       !absoluteClipPath ? shadowInfo + this.getSvgCommons() : '',
-      ' >\n'
+      ' >\n',
     );
     const commonPieces = [
       styleInfo,
@@ -251,10 +228,10 @@ export class FabricObjectSVGExportMixin {
       additionalTransform ? `transform="${additionalTransform}" ` : '',
     ].join('');
     objectMarkup[index] = commonPieces;
-    if (fill && fill.toLive) {
+    if (isFiller(fill)) {
       markup.push(fill.toSVG(this));
     }
-    if (stroke && stroke.toLive) {
+    if (isFiller(stroke)) {
       markup.push(stroke.toSVG(this));
     }
     if (shadow) {
@@ -269,9 +246,7 @@ export class FabricObjectSVGExportMixin {
     return reviver ? reviver(markup.join('')) : markup.join('');
   }
 
-  addPaintOrder() {
-    return this.paintFirst !== 'fill'
-      ? ` paint-order="${this.paintFirst}" `
-      : '';
+  addPaintOrder(this: FabricObjectSVGExportMixin & FabricObject) {
+    return this.paintFirst !== FILL ? ` paint-order="${this.paintFirst}" ` : '';
   }
 }

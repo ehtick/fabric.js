@@ -7,18 +7,42 @@ import {
   keysMap,
   keysMapRtl,
 } from './constants';
-import type { AssertKeys, TFiller } from '../../typedefs';
+import type { TClassProperties, TFiller, TOptions } from '../../typedefs';
 import { classRegistry } from '../../ClassRegistry';
 import type { SerializedTextProps, TextProps } from '../Text/Text';
+import {
+  JUSTIFY,
+  JUSTIFY_CENTER,
+  JUSTIFY_LEFT,
+  JUSTIFY_RIGHT,
+} from '../Text/constants';
+import { CENTER, FILL, LEFT, RIGHT } from '../../constants';
+import type { ObjectToCanvasElementOptions } from '../Object/Object';
 
-type CursorBoundaries = {
+export type CursorBoundaries = {
   left: number;
   top: number;
   leftOffset: number;
   topOffset: number;
 };
 
-export const iTextDefaultValues = {
+export type CursorRenderingData = {
+  color: string;
+  opacity: number;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
+// Declare IText protected properties to workaround TS
+const protectedDefaultValues = {
+  _selectionDirection: null,
+  _reSpace: /\s|\r?\n/,
+  inCompositionMode: false,
+};
+
+export const iTextDefaultValues: Partial<TClassProperties<IText>> = {
   selectionStart: 0,
   selectionEnd: 0,
   selectionColor: 'rgba(17,119,255,0.3)',
@@ -31,13 +55,11 @@ export const iTextDefaultValues = {
   cursorDuration: 600,
   caching: true,
   hiddenTextareaContainer: null,
-  _selectionDirection: null,
-  _reSpace: /\s|\n/,
-  inCompositionMode: false,
   keysMap,
   keysMapRtl,
   ctrlKeysMapDown,
   ctrlKeysMapUp,
+  ...protectedDefaultValues,
 };
 
 // @TODO this is not complete
@@ -96,9 +118,9 @@ export interface ITextProps extends TextProps, UniqueITextProps {}
  * ```
  */
 export class IText<
-    Props extends ITextProps = ITextProps,
+    Props extends TOptions<ITextProps> = Partial<ITextProps>,
     SProps extends SerializedITextProps = SerializedITextProps,
-    EventSpec extends ITextEvents = ITextEvents
+    EventSpec extends ITextEvents = ITextEvents,
   >
   extends ITextClickBehavior<Props, SProps, EventSpec>
   implements UniqueITextProps
@@ -189,24 +211,27 @@ export class IText<
    */
   declare caching: boolean;
 
-  static ownDefaults: Record<string, any> = iTextDefaultValues;
+  static ownDefaults = iTextDefaultValues;
 
-  static getDefaults() {
+  static getDefaults(): Record<string, any> {
     return { ...super.getDefaults(), ...IText.ownDefaults };
   }
 
+  static type = 'IText';
+
   get type() {
-    return 'i-text';
+    const type = super.type;
+    // backward compatibility
+    return type === 'itext' ? 'i-text' : type;
   }
 
   /**
-
    * Constructor
    * @param {String} text Text string
    * @param {Object} [options] Options object
    */
-  constructor(text: string, options: object) {
-    super(text, options);
+  constructor(text: string, options?: Props) {
+    super(text, { ...IText.ownDefaults, ...options } as Props);
     this.initBehavior();
   }
 
@@ -255,7 +280,7 @@ export class IText<
    */
   protected _updateAndFire(
     property: 'selectionStart' | 'selectionEnd',
-    index: number
+    index: number,
   ) {
     if (this[property] !== index) {
       this._fireSelectionChanged();
@@ -296,7 +321,7 @@ export class IText<
   getSelectionStyles(
     startIndex: number = this.selectionStart || 0,
     endIndex: number = this.selectionEnd,
-    complete?: boolean
+    complete?: boolean,
   ) {
     return super.getSelectionStyles(startIndex, endIndex, complete);
   }
@@ -310,7 +335,7 @@ export class IText<
   setSelectionStyles(
     styles: object,
     startIndex: number = this.selectionStart || 0,
-    endIndex: number = this.selectionEnd
+    endIndex: number = this.selectionEnd,
   ) {
     return super.setSelectionStyles(styles, startIndex, endIndex);
   }
@@ -322,7 +347,7 @@ export class IText<
    */
   get2DCursorLocation(
     selectionStart = this.selectionStart,
-    skipWrapping?: boolean
+    skipWrapping?: boolean,
   ) {
     return super.get2DCursorLocation(selectionStart, skipWrapping);
   }
@@ -343,7 +368,7 @@ export class IText<
    * @override block cursor/selection logic while rendering the exported canvas
    * @todo this workaround should be replaced with a more robust solution
    */
-  toCanvasElement(options?: any): HTMLCanvasElement {
+  toCanvasElement(options?: ObjectToCanvasElementOptions): HTMLCanvasElement {
     const isEditing = this.isEditing;
     this.isEditing = false;
     const canvas = super.toCanvasElement(options);
@@ -364,7 +389,7 @@ export class IText<
       return;
     }
     const boundaries = this._getCursorBoundaries();
-    if (this.selectionStart === this.selectionEnd) {
+    if (this.selectionStart === this.selectionEnd && !this.inCompositionMode) {
       this.renderCursor(ctx, boundaries);
     } else {
       this.renderSelection(ctx, boundaries);
@@ -383,7 +408,7 @@ export class IText<
    */
   _getCursorBoundaries(
     index: number = this.selectionStart,
-    skipCaching?: boolean
+    skipCaching?: boolean,
   ): CursorBoundaries {
     const left = this._getLeftOffset(),
       top = this._getTopOffset(),
@@ -404,7 +429,7 @@ export class IText<
    */
   _getCursorBoundariesOffsets(
     index: number,
-    skipCaching?: boolean
+    skipCaching?: boolean,
   ): { left: number; top: number } {
     if (skipCaching) {
       return this.__getCursorBoundariesOffsets(index);
@@ -443,19 +468,16 @@ export class IText<
     };
     if (this.direction === 'rtl') {
       if (
-        this.textAlign === 'right' ||
-        this.textAlign === 'justify' ||
-        this.textAlign === 'justify-right'
+        this.textAlign === RIGHT ||
+        this.textAlign === JUSTIFY ||
+        this.textAlign === JUSTIFY_RIGHT
       ) {
         boundaries.left *= -1;
-      } else if (
-        this.textAlign === 'left' ||
-        this.textAlign === 'justify-left'
-      ) {
+      } else if (this.textAlign === LEFT || this.textAlign === JUSTIFY_LEFT) {
         boundaries.left = lineLeftOffset - (leftOffset > 0 ? leftOffset : 0);
       } else if (
-        this.textAlign === 'center' ||
-        this.textAlign === 'justify-center'
+        this.textAlign === CENTER ||
+        this.textAlign === JUSTIFY_CENTER
       ) {
         boundaries.left = lineLeftOffset - (leftOffset > 0 ? leftOffset : 0);
       }
@@ -469,8 +491,11 @@ export class IText<
    * If contextTop is not available, do nothing.
    */
   renderCursorAt(selectionStart: number) {
-    const boundaries = this._getCursorBoundaries(selectionStart, true);
-    this._renderCursor(this.canvas!.contextTop, boundaries, selectionStart);
+    this._renderCursor(
+      this.canvas!.contextTop,
+      this._getCursorBoundaries(selectionStart, true),
+      selectionStart,
+    );
   }
 
   /**
@@ -482,17 +507,22 @@ export class IText<
     this._renderCursor(ctx, boundaries, this.selectionStart);
   }
 
-  _renderCursor(
-    ctx: CanvasRenderingContext2D,
-    boundaries: CursorBoundaries,
-    selectionStart: number
-  ) {
+  /**
+   * Return the data needed to render the cursor for given selection start
+   * The left,top are relative to the object, while width and height are prescaled
+   * to look think with canvas zoom and object scaling,
+   * so they depend on canvas and object scaling
+   */
+  getCursorRenderingData(
+    selectionStart: number = this.selectionStart,
+    boundaries: CursorBoundaries = this._getCursorBoundaries(selectionStart),
+  ): CursorRenderingData {
     const cursorLocation = this.get2DCursorLocation(selectionStart),
       lineIndex = cursorLocation.lineIndex,
       charIndex =
         cursorLocation.charIndex > 0 ? cursorLocation.charIndex - 1 : 0,
       charHeight = this.getValueOfPropertyAt(lineIndex, charIndex, 'fontSize'),
-      multiplier = this.scaleX * this.canvas!.getZoom(),
+      multiplier = this.getObjectScaling().x * this.canvas!.getZoom(),
       cursorWidth = this.cursorWidth / multiplier,
       dy = this.getValueOfPropertyAt(lineIndex, charIndex, 'deltaY'),
       topOffset =
@@ -501,21 +531,32 @@ export class IText<
           this.lineHeight -
         charHeight * (1 - this._fontSizeFraction);
 
-    if (this.inCompositionMode) {
-      // TODO: investigate why there isn't a return inside the if,
-      // and why can't happen at the top of the function
-      this.renderSelection(ctx, boundaries);
-    }
-    ctx.fillStyle =
-      this.cursorColor ||
-      this.getValueOfPropertyAt(lineIndex, charIndex, 'fill');
-    ctx.globalAlpha = this._currentCursorOpacity;
-    ctx.fillRect(
-      boundaries.left + boundaries.leftOffset - cursorWidth / 2,
-      topOffset + boundaries.top + dy,
-      cursorWidth,
-      charHeight
-    );
+    return {
+      color:
+        this.cursorColor ||
+        (this.getValueOfPropertyAt(lineIndex, charIndex, 'fill') as string),
+      opacity: this._currentCursorOpacity,
+      left: boundaries.left + boundaries.leftOffset - cursorWidth / 2,
+      top: topOffset + boundaries.top + dy,
+      width: cursorWidth,
+      height: charHeight,
+    };
+  }
+
+  /**
+   * Render the cursor at the given selectionStart.
+   *
+   */
+  _renderCursor(
+    ctx: CanvasRenderingContext2D,
+    boundaries: CursorBoundaries,
+    selectionStart: number,
+  ) {
+    const { color, opacity, left, top, width, height } =
+      this.getCursorRenderingData(selectionStart, boundaries);
+    ctx.fillStyle = color;
+    ctx.globalAlpha = opacity;
+    ctx.fillRect(left, top, width, height);
   }
 
   /**
@@ -538,13 +579,13 @@ export class IText<
   /**
    * Renders drag start text selection
    */
-  renderDragSourceEffect(this: AssertKeys<this, 'canvas'>) {
+  renderDragSourceEffect() {
     const dragStartSelection =
       this.draggableTextDelegate.getDragStartSelection()!;
     this._renderSelection(
-      this.canvas.contextTop,
+      this.canvas!.contextTop,
       dragStartSelection,
-      this._getCursorBoundaries(dragStartSelection.selectionStart, true)
+      this._getCursorBoundaries(dragStartSelection.selectionStart, true),
     );
   }
 
@@ -563,11 +604,11 @@ export class IText<
   _renderSelection(
     ctx: CanvasRenderingContext2D,
     selection: { selectionStart: number; selectionEnd: number },
-    boundaries: CursorBoundaries
+    boundaries: CursorBoundaries,
   ) {
     const selectionStart = selection.selectionStart,
       selectionEnd = selection.selectionEnd,
-      isJustify = this.textAlign.indexOf('justify') !== -1,
+      isJustify = this.textAlign.includes(JUSTIFY),
       start = this.get2DCursorLocation(selectionStart),
       end = this.get2DCursorLocation(selectionEnd),
       startLine = start.lineIndex,
@@ -618,19 +659,16 @@ export class IText<
       }
       if (this.direction === 'rtl') {
         if (
-          this.textAlign === 'right' ||
-          this.textAlign === 'justify' ||
-          this.textAlign === 'justify-right'
+          this.textAlign === RIGHT ||
+          this.textAlign === JUSTIFY ||
+          this.textAlign === JUSTIFY_RIGHT
         ) {
           drawStart = this.width - drawStart - drawWidth;
-        } else if (
-          this.textAlign === 'left' ||
-          this.textAlign === 'justify-left'
-        ) {
+        } else if (this.textAlign === LEFT || this.textAlign === JUSTIFY_LEFT) {
           drawStart = boundaries.left + lineOffset - boxEnd;
         } else if (
-          this.textAlign === 'center' ||
-          this.textAlign === 'justify-center'
+          this.textAlign === CENTER ||
+          this.textAlign === JUSTIFY_CENTER
         ) {
           drawStart = boundaries.left + lineOffset - boxEnd;
         }
@@ -639,7 +677,7 @@ export class IText<
         drawStart,
         boundaries.top + boundaries.topOffset + extraTop,
         drawWidth,
-        drawHeight
+        drawHeight,
       );
       boundaries.topOffset += realLineHeight;
     }
@@ -665,9 +703,9 @@ export class IText<
    * Unused by the library, is for the end user
    * @return {String | TFiller} Character color (fill)
    */
-  getCurrentCharColor(): string | TFiller {
+  getCurrentCharColor(): string | TFiller | null {
     const cp = this._getCurrentCharIndex();
-    return this.getValueOfPropertyAt(cp.l, cp.c, 'fill');
+    return this.getValueOfPropertyAt(cp.l, cp.c, FILL);
   }
 
   /**
@@ -682,7 +720,7 @@ export class IText<
   }
 
   dispose() {
-    this._exitEditing();
+    this.exitEditingImpl();
     this.draggableTextDelegate.dispose();
     super.dispose();
   }

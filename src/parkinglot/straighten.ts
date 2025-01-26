@@ -6,6 +6,13 @@ import { animate } from '../util/animation/animate';
 
 Object.assign(FabricObject.prototype, {
   /**
+   * Animation duration (in ms) for fx* methods
+   * @type Number
+   * @default
+   */
+  FX_DURATION: 500,
+
+  /**
    * @private
    * @return {Number} angle value
    */
@@ -35,7 +42,7 @@ Object.assign(FabricObject.prototype, {
     callbacks: {
       onChange?(value: TDegree): any;
       onComplete?(): any;
-    } = {}
+    } = {},
   ) {
     const onComplete = callbacks.onComplete || noop,
       onChange = callbacks.onChange || noop;

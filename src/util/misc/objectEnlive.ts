@@ -1,9 +1,17 @@
 import { noop } from '../../constants';
-import type { Pattern } from '../../Pattern';
 import type { FabricObject } from '../../shapes/Object/FabricObject';
-import type { Abortable, TCrossOrigin, TFiller } from '../../typedefs';
+import type {
+  Abortable,
+  Constructor,
+  TCrossOrigin,
+  TFiller,
+} from '../../typedefs';
 import { createImage } from './dom';
 import { classRegistry } from '../../ClassRegistry';
+import type { BaseFilter } from '../../filters/BaseFilter';
+import type { FabricObject as BaseFabricObject } from '../../shapes/Object/Object';
+import { FabricError, SignalAbortedError } from '../internals/console';
+import type { Shadow } from '../../Shadow';
 
 export type LoadImageOptions = Abortable & {
   /**
@@ -20,11 +28,11 @@ export type LoadImageOptions = Abortable & {
  */
 export const loadImage = (
   url: string,
-  { signal, crossOrigin = null }: LoadImageOptions = {}
+  { signal, crossOrigin = null }: LoadImageOptions = {},
 ) =>
   new Promise<HTMLImageElement>(function (resolve, reject) {
     if (signal && signal.aborted) {
-      return reject(new Error('`options.signal` is in `aborted` state'));
+      return reject(new SignalAbortedError('loadImage'));
     }
     const img = createImage();
     let abort: EventListenerOrEventListenerObject;
@@ -47,7 +55,7 @@ export const loadImage = (
     img.onload = done;
     img.onerror = function () {
       abort && signal?.removeEventListener('abort', abort);
-      reject(new Error('Error loading ' + img.src));
+      reject(new FabricError(`Error loading ${img.src}`));
     };
     crossOrigin && (img.crossOrigin = crossOrigin);
     img.src = url;
@@ -58,13 +66,21 @@ export type EnlivenObjectOptions = Abortable & {
    * Method for further parsing of object elements,
    * called after each fabric object created.
    */
-  reviver?: (
+  reviver?: <
+    T extends
+      | BaseFabricObject
+      | FabricObject
+      | BaseFilter<string>
+      | Shadow
+      | TFiller,
+  >(
     serializedObj: Record<string, any>,
-    instance: FabricObject
+    instance: T,
   ) => void;
 };
 
 /**
+ * @TODO type this correctly.
  * Creates corresponding fabric instances from their object representations
  * @param {Object[]} objects Objects to enliven
  * @param {EnlivenObjectOptions} [options]
@@ -73,34 +89,42 @@ export type EnlivenObjectOptions = Abortable & {
  * @param {AbortSignal} [options.signal] handle aborting, see https://developer.mozilla.org/en-US/docs/Web/API/AbortController/signal
  * @returns {Promise<FabricObject[]>}
  */
-export const enlivenObjects = (
+export const enlivenObjects = <
+  T extends
+    | BaseFabricObject
+    | FabricObject
+    | BaseFilter<string>
+    | Shadow
+    | TFiller,
+>(
   objects: any[],
-  { signal, reviver = noop }: EnlivenObjectOptions = {}
+  { signal, reviver = noop }: EnlivenObjectOptions = {},
 ) =>
-  new Promise<FabricObject[]>((resolve, reject) => {
-    const instances: FabricObject[] = [];
+  new Promise<T[]>((resolve, reject) => {
+    const instances: T[] = [];
     signal && signal.addEventListener('abort', reject, { once: true });
     Promise.all(
       objects.map((obj) =>
         classRegistry
-          .getClass(obj.type)
-          // @ts-ignore
-          .fromObject(obj, {
-            signal,
-            reviver,
-          })
-          .then((fabricInstance: FabricObject) => {
+          .getClass<
+            Constructor<T> & {
+              fromObject(options: any, context: Abortable): Promise<T>;
+            }
+          >(obj.type)
+          .fromObject(obj, { signal })
+          .then((fabricInstance) => {
             reviver(obj, fabricInstance);
             instances.push(fabricInstance);
             return fabricInstance;
-          })
-      )
+          }),
+      ),
     )
       .then(resolve)
       .catch((error) => {
         // cleanup
-        instances.forEach(function (instance) {
-          instance.dispose && instance.dispose();
+        instances.forEach((instance) => {
+          (instance as FabricObject).dispose &&
+            (instance as FabricObject).dispose();
         });
         reject(error);
       })
@@ -117,39 +141,32 @@ export const enlivenObjects = (
  * @returns {Promise<Record<string, FabricObject | TFiller | null>>} the input object with enlived values
  */
 export const enlivenObjectEnlivables = <
-  R = Record<string, FabricObject | TFiller | null>
+  R = Record<string, FabricObject | TFiller | null>,
 >(
   serializedObject: any,
-  { signal }: Abortable = {}
+  { signal }: Abortable = {},
 ) =>
   new Promise<R>((resolve, reject) => {
-    const instances: (FabricObject | TFiller)[] = [];
+    const instances: (FabricObject | TFiller | Shadow)[] = [];
     signal && signal.addEventListener('abort', reject, { once: true });
     // enlive every possible property
     const promises = Object.values(serializedObject).map((value: any) => {
       if (!value) {
         return value;
       }
-      // gradient
-      if (value.colorStops) {
-        return new (classRegistry.getClass('gradient'))(value);
-      }
-      // clipPath
-      if (value.type) {
-        return enlivenObjects([value], { signal }).then(([enlived]) => {
+      /**
+       * clipPath or shadow or gradient or text on a path or a pattern,
+       * or the backgroundImage or overlayImage of canvas
+       * If we have a type and there is a classe registered for it, we enlive it.
+       * If there is no class registered for it we return the value as is
+       * */
+      if (value.type && classRegistry.has(value.type)) {
+        return enlivenObjects<FabricObject | Shadow | TFiller>([value], {
+          signal,
+        }).then(([enlived]) => {
           instances.push(enlived);
           return enlived;
         });
-      }
-      // pattern
-      if (value.source) {
-        return classRegistry
-          .getClass('pattern')
-          .fromObject(value, { signal })
-          .then((pattern: Pattern) => {
-            instances.push(pattern);
-            return pattern;
-          });
       }
       return value;
     });

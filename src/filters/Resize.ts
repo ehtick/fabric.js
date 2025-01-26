@@ -1,25 +1,46 @@
-// @ts-nocheck
-import type { TClassProperties } from '../typedefs';
 import { BaseFilter } from './BaseFilter';
-import type { T2DPipelineState, TWebGLPipelineState } from './typedefs';
-import { isWebGLPipelineState } from './typedefs';
+import type {
+  T2DPipelineState,
+  TWebGLPipelineState,
+  TWebGLUniformLocationMap,
+} from './typedefs';
+import { isWebGLPipelineState } from './utils';
 import { classRegistry } from '../ClassRegistry';
 import { createCanvasElement } from '../util/misc/dom';
+import type { XY } from '../Point';
 
-export const resizeDefaultValues: Partial<TClassProperties<Resize>> = {
+export type TResizeType = 'bilinear' | 'hermite' | 'sliceHack' | 'lanczos';
+
+export type ResizeOwnProps = {
+  resizeType: TResizeType;
+  scaleX: number;
+  scaleY: number;
+  lanczosLobes: number;
+};
+
+export const resizeDefaultValues: ResizeOwnProps = {
   resizeType: 'hermite',
   scaleX: 1,
   scaleY: 1,
   lanczosLobes: 3,
-  fragmentSourceTOP: `
-    precision highp float;
-    uniform sampler2D uTexture;
-    uniform vec2 uDelta;
-    varying vec2 vTexCoord;
-  `,
 };
 
-type TResizeType = 'bilinear' | 'hermite' | 'sliceHack' | 'lanczos';
+type ResizeDuring2DResize = Resize & {
+  rcpScaleX: number;
+  rcpScaleY: number;
+};
+
+type ResizeDuringWEBGLResize = Resize & {
+  rcpScaleX: number;
+  rcpScaleY: number;
+  horizontal: boolean;
+  width: number;
+  height: number;
+  taps: number[];
+  tempScale: number;
+  dH: number;
+  dW: number;
+};
 
 /**
  * Resize image filter class
@@ -28,52 +49,41 @@ type TResizeType = 'bilinear' | 'hermite' | 'sliceHack' | 'lanczos';
  * object.filters.push(filter);
  * object.applyFilters(canvas.renderAll.bind(canvas));
  */
-export class Resize extends BaseFilter {
+export class Resize extends BaseFilter<'Resize', ResizeOwnProps> {
   /**
    * Resize type
    * for webgl resizeType is just lanczos, for canvas2d can be:
    * bilinear, hermite, sliceHack, lanczos.
    * @default
    */
-  declare resizeType: TResizeType;
+  declare resizeType: ResizeOwnProps['resizeType'];
 
   /**
    * Scale factor for resizing, x axis
    * @param {Number} scaleX
    * @default
    */
-  declare scaleX: number;
+  declare scaleX: ResizeOwnProps['scaleX'];
 
   /**
    * Scale factor for resizing, y axis
    * @param {Number} scaleY
    * @default
    */
-  declare scaleY: number;
+  declare scaleY: ResizeOwnProps['scaleY'];
 
   /**
    * LanczosLobes parameter for lanczos filter, valid for resizeType lanczos
    * @param {Number} lanczosLobes
    * @default
    */
-  declare lanczosLobes: number;
+  declare lanczosLobes: ResizeOwnProps['lanczosLobes'];
 
-  declare fragmentSourceTOP: string;
+  static type = 'Resize';
 
   static defaults = resizeDefaultValues;
 
-  /**
-   * Return WebGL uniform locations for this filter's shader.
-   *
-   * @param {WebGLRenderingContext} gl The GL canvas context used to compile this filter's shader.
-   * @param {WebGLShaderProgram} program This filter's compiled shader program.
-   */
-  getUniformLocations(gl, program) {
-    return {
-      uDelta: gl.getUniformLocation(program, 'uDelta'),
-      uTaps: gl.getUniformLocation(program, 'uTaps'),
-    };
-  }
+  static uniformLocations = ['uDelta', 'uTaps'];
 
   /**
    * Send data from this filter to its shader program's uniforms.
@@ -81,30 +91,34 @@ export class Resize extends BaseFilter {
    * @param {WebGLRenderingContext} gl The GL canvas context used to compile this filter's shader.
    * @param {Object} uniformLocations A map of string uniform names to WebGLUniformLocation objects
    */
-  sendUniformData(gl, uniformLocations) {
+  sendUniformData(
+    this: ResizeDuringWEBGLResize,
+    gl: WebGLRenderingContext,
+    uniformLocations: TWebGLUniformLocationMap,
+  ) {
     gl.uniform2fv(
       uniformLocations.uDelta,
-      this.horizontal ? [1 / this.width, 0] : [0, 1 / this.height]
+      this.horizontal ? [1 / this.width, 0] : [0, 1 / this.height],
     );
     gl.uniform1fv(uniformLocations.uTaps, this.taps);
   }
 
-  getFilterWindow() {
+  getFilterWindow(this: ResizeDuringWEBGLResize) {
     const scale = this.tempScale;
     return Math.ceil(this.lanczosLobes / scale);
   }
 
-  getCacheKey(): string {
+  getCacheKey(this: ResizeDuringWEBGLResize): string {
     const filterWindow = this.getFilterWindow();
     return `${this.type}_${filterWindow}`;
   }
 
-  getFragmentSource(): string {
+  getFragmentSource(this: ResizeDuringWEBGLResize): string {
     const filterWindow = this.getFilterWindow();
     return this.generateShader(filterWindow);
   }
 
-  getTaps() {
+  getTaps(this: ResizeDuringWEBGLResize) {
     const lobeFunction = this.lanczosCreate(this.lanczosLobes),
       scale = this.tempScale,
       filterWindow = this.getFilterWindow(),
@@ -125,7 +139,10 @@ export class Resize extends BaseFilter {
       offsets[i - 1] = `${i}.0 * uDelta`;
     }
     return `
-      ${this.fragmentSourceTOP}
+      precision highp float;
+      uniform sampler2D uTexture;
+      uniform vec2 uDelta;
+      varying vec2 vTexCoord;
       uniform float uTaps[${filterWindow}];
       void main() {
         vec4 color = texture2D(uTexture, vTexCoord);
@@ -135,12 +152,34 @@ export class Resize extends BaseFilter {
             (offset, i) => `
               color += texture2D(uTexture, vTexCoord + ${offset}) * uTaps[${i}] + texture2D(uTexture, vTexCoord - ${offset}) * uTaps[${i}];
               sum += 2.0 * uTaps[${i}];
-            `
+            `,
           )
           .join('\n')}
         gl_FragColor = color / sum;
       }
     `;
+  }
+
+  applyToForWebgl(this: ResizeDuringWEBGLResize, options: TWebGLPipelineState) {
+    options.passes++;
+    this.width = options.sourceWidth;
+    this.horizontal = true;
+    this.dW = Math.round(this.width * this.scaleX);
+    this.dH = options.sourceHeight;
+    this.tempScale = this.dW / this.width;
+    this.taps = this.getTaps();
+    options.destinationWidth = this.dW;
+    super.applyTo(options);
+    options.sourceWidth = options.destinationWidth;
+
+    this.height = options.sourceHeight;
+    this.horizontal = false;
+    this.dH = Math.round(this.height * this.scaleY);
+    this.tempScale = this.dH / this.height;
+    this.taps = this.getTaps();
+    options.destinationHeight = this.dH;
+    super.applyTo(options);
+    options.sourceHeight = options.destinationHeight;
   }
 
   /**
@@ -157,31 +196,9 @@ export class Resize extends BaseFilter {
    */
   applyTo(options: TWebGLPipelineState | T2DPipelineState) {
     if (isWebGLPipelineState(options)) {
-      options.passes++;
-      this.width = options.sourceWidth;
-      this.horizontal = true;
-      this.dW = Math.round(this.width * this.scaleX);
-      this.dH = options.sourceHeight;
-      this.tempScale = this.dW / this.width;
-      this.taps = this.getTaps();
-      options.destinationWidth = this.dW;
-      this._setupFrameBuffer(options);
-      this.applyToWebGL(options);
-      this._swapTextures(options);
-      options.sourceWidth = options.destinationWidth;
-
-      this.height = options.sourceHeight;
-      this.horizontal = false;
-      this.dH = Math.round(this.height * this.scaleY);
-      this.tempScale = this.dH / this.height;
-      this.taps = this.getTaps();
-      options.destinationHeight = this.dH;
-      this._setupFrameBuffer(options);
-      this.applyToWebGL(options);
-      this._swapTextures(options);
-      options.sourceHeight = options.destinationHeight;
+      (this as unknown as ResizeDuringWEBGLResize).applyToForWebgl(options);
     } else {
-      this.applyTo2d(options);
+      (this as unknown as ResizeDuring2DResize).applyTo2d(options);
     }
   }
 
@@ -203,7 +220,7 @@ export class Resize extends BaseFilter {
     };
   }
 
-  applyTo2d(options: T2DPipelineState) {
+  applyTo2d(this: ResizeDuring2DResize, options: T2DPipelineState) {
     const imageData = options.imageData,
       scaleX = this.scaleX,
       scaleY = this.scaleY;
@@ -215,7 +232,7 @@ export class Resize extends BaseFilter {
     const oH = imageData.height;
     const dW = Math.round(oW * scaleX);
     const dH = Math.round(oH * scaleY);
-    let newData;
+    let newData: ImageData;
 
     if (this.resizeType === 'sliceHack') {
       newData = this.sliceByTwo(options, oW, oH, dW, dH);
@@ -225,6 +242,9 @@ export class Resize extends BaseFilter {
       newData = this.bilinearFiltering(options, oW, oH, dW, dH);
     } else if (this.resizeType === 'lanczos') {
       newData = this.lanczosResize(options, oW, oH, dW, dH);
+    } else {
+      // this should never trigger, is here just for safety net.
+      newData = new ImageData(dW, dH);
     }
     options.imageData = newData;
   }
@@ -243,7 +263,7 @@ export class Resize extends BaseFilter {
     oW: number,
     oH: number,
     dW: number,
-    dH: number
+    dH: number,
   ) {
     const imageData = options.imageData;
     const mult = 0.5;
@@ -264,7 +284,7 @@ export class Resize extends BaseFilter {
       tmpCanvas.width = oW * 1.5;
       tmpCanvas.height = oH;
     }
-    const ctx = tmpCanvas.getContext('2d');
+    const ctx = tmpCanvas.getContext('2d')!;
     ctx.clearRect(0, 0, oW * 1.5, oH);
     ctx.putImageData(imageData, 0, 0);
 
@@ -304,13 +324,14 @@ export class Resize extends BaseFilter {
    * @returns {ImageData}
    */
   lanczosResize(
+    this: ResizeDuring2DResize,
     options: T2DPipelineState,
     oW: number,
     oH: number,
     dW: number,
-    dH: number
-  ) {
-    function process(u) {
+    dH: number,
+  ): ImageData {
+    function process(u: number): ImageData {
       let v, i, weight, idx, a, red, green, blue, alpha, fX, fY;
       center.x = (u + 0.5) * ratioX;
       icenter.x = Math.floor(center.x);
@@ -338,8 +359,8 @@ export class Resize extends BaseFilter {
             if (!cacheLanc[fX][fY]) {
               cacheLanc[fX][fY] = lanczos(
                 Math.sqrt(
-                  Math.pow(fX * rcpRatioX, 2) + Math.pow(fY * rcpRatioY, 2)
-                ) / 1000
+                  Math.pow(fX * rcpRatioX, 2) + Math.pow(fY * rcpRatioY, 2),
+                ) / 1000,
               );
             }
             weight = cacheLanc[fX][fY];
@@ -377,9 +398,9 @@ export class Resize extends BaseFilter {
       rcpRatioY = 2 / this.rcpScaleY,
       range2X = Math.ceil((ratioX * this.lanczosLobes) / 2),
       range2Y = Math.ceil((ratioY * this.lanczosLobes) / 2),
-      cacheLanc = {},
-      center = {},
-      icenter = {};
+      cacheLanc: Record<number, Record<number, number>> = {},
+      center: XY = { x: 0, y: 0 },
+      icenter: XY = { x: 0, y: 0 };
 
     return process(0);
   }
@@ -394,11 +415,12 @@ export class Resize extends BaseFilter {
    * @returns {ImageData}
    */
   bilinearFiltering(
+    this: ResizeDuring2DResize,
     options: T2DPipelineState,
     oW: number,
     oH: number,
     dW: number,
-    dH: number
+    dH: number,
   ) {
     let a;
     let b;
@@ -456,11 +478,12 @@ export class Resize extends BaseFilter {
    * @returns {ImageData}
    */
   hermiteFastResize(
+    this: ResizeDuring2DResize,
     options: T2DPipelineState,
     oW: number,
     oH: number,
     dW: number,
-    dH: number
+    dH: number,
   ) {
     const ratioW = this.rcpScaleX,
       ratioH = this.rcpScaleY,
@@ -518,20 +541,6 @@ export class Resize extends BaseFilter {
       }
     }
     return img2;
-  }
-
-  /**
-   * Returns object representation of an instance
-   * @return {Object} Object representation of an instance
-   */
-  toObject() {
-    return {
-      type: this.type,
-      scaleX: this.scaleX,
-      scaleY: this.scaleY,
-      resizeType: this.resizeType,
-      lanczosLobes: this.lanczosLobes,
-    };
   }
 }
 

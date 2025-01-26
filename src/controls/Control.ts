@@ -1,16 +1,20 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
-import { halfPI } from '../constants';
 import type {
   ControlActionHandler,
   TPointerEvent,
   TransformActionHandler,
 } from '../EventTypeDefs';
+import { Intersection } from '../Intersection';
 import { Point } from '../Point';
+import { SCALE } from '../constants';
 import type { InteractiveFabricObject } from '../shapes/Object/InteractiveObject';
-import type { TDegree, TMat2D } from '../typedefs';
-import { cos } from '../util/misc/cos';
-import { degreesToRadians } from '../util/misc/radiansDegreesConversion';
-import { sin } from '../util/misc/sin';
+import type { TCornerPoint, TDegree, TMat2D } from '../typedefs';
+import {
+  createRotateMatrix,
+  createScaleMatrix,
+  createTranslateMatrix,
+  multiplyTransformMatrixArray,
+} from '../util/misc/matrix';
 import type { ControlRenderingStyleOverride } from './controlRendering';
 import { renderCircleControl, renderSquareControl } from './controlRendering';
 
@@ -36,7 +40,7 @@ export class Control {
    * @type {String}
    * @default 'scale'
    */
-  actionName = 'scale';
+  actionName = SCALE;
 
   /**
    * Drawing angle of the control.
@@ -93,7 +97,7 @@ export class Control {
    * @type {?Number}
    * @default null
    */
-  sizeX: number | null = null;
+  sizeX = 0;
 
   /**
    * Sets the height of the control. If null, defaults to object's cornerSize.
@@ -101,7 +105,7 @@ export class Control {
    * @type {?Number}
    * @default null
    */
-  sizeY: number | null = null;
+  sizeY = 0;
 
   /**
    * Sets the length of the touch area of the control. If null, defaults to object's touchCornerSize.
@@ -109,7 +113,7 @@ export class Control {
    * @type {?Number}
    * @default null
    */
-  touchSizeX: number | null = null;
+  touchSizeX = 0;
 
   /**
    * Sets the height of the touch area of the control. If null, defaults to object's touchCornerSize.
@@ -117,7 +121,7 @@ export class Control {
    * @type {?Number}
    * @default null
    */
-  touchSizeY: number | null = null;
+  touchSizeY = 0;
 
   /**
    * Css cursor style to display when the control is hovered.
@@ -135,7 +139,7 @@ export class Control {
    */
   withConnection = false;
 
-  constructor(options: Partial<Control>) {
+  constructor(options?: Partial<Control>) {
     Object.assign(this, options);
   }
 
@@ -169,6 +173,20 @@ export class Control {
    */
   declare mouseUpHandler?: ControlActionHandler;
 
+  shouldActivate(
+    controlKey: string,
+    fabricObject: InteractiveFabricObject,
+    pointer: Point,
+    { tl, tr, br, bl }: TCornerPoint,
+  ) {
+    // TODO: locking logic can be handled here instead of in the control handler logic
+    return (
+      fabricObject.canvas?.getActiveObject() === fabricObject &&
+      fabricObject.isControlVisible(controlKey) &&
+      Intersection.isPointInPolygon(pointer, [tl, tr, br, bl])
+    );
+  }
+
   /**
    * Returns control actionHandler
    * @param {Event} eventData the native mouse event
@@ -179,7 +197,7 @@ export class Control {
   getActionHandler(
     eventData: TPointerEvent,
     fabricObject: InteractiveFabricObject,
-    control: Control
+    control: Control,
   ): TransformActionHandler | undefined {
     return this.actionHandler;
   }
@@ -194,7 +212,7 @@ export class Control {
   getMouseDownHandler(
     eventData: TPointerEvent,
     fabricObject: InteractiveFabricObject,
-    control: Control
+    control: Control,
   ): ControlActionHandler | undefined {
     return this.mouseDownHandler;
   }
@@ -210,7 +228,7 @@ export class Control {
   getMouseUpHandler(
     eventData: TPointerEvent,
     fabricObject: InteractiveFabricObject,
-    control: Control
+    control: Control,
   ): ControlActionHandler | undefined {
     return this.mouseUpHandler;
   }
@@ -227,7 +245,7 @@ export class Control {
   cursorStyleHandler(
     eventData: TPointerEvent,
     control: Control,
-    fabricObject: InteractiveFabricObject
+    fabricObject: InteractiveFabricObject,
   ) {
     return control.cursorStyle;
   }
@@ -242,7 +260,7 @@ export class Control {
   getActionName(
     eventData: TPointerEvent,
     control: Control,
-    fabricObject: InteractiveFabricObject
+    fabricObject: InteractiveFabricObject,
   ) {
     return control.actionName;
   }
@@ -265,7 +283,7 @@ export class Control {
   setVisibility(
     visibility: boolean,
     name: string,
-    fabricObject: InteractiveFabricObject
+    fabricObject: InteractiveFabricObject,
   ) {
     this.visible = visibility;
   }
@@ -274,11 +292,11 @@ export class Control {
     dim: Point,
     finalMatrix: TMat2D,
     fabricObject: InteractiveFabricObject,
-    currentControl: Control
+    currentControl: Control,
   ) {
     return new Point(
       this.x * dim.x + this.offsetX,
-      this.y * dim.y + this.offsetY
+      this.y * dim.y + this.offsetY,
     ).transform(finalMatrix);
   }
 
@@ -292,43 +310,26 @@ export class Control {
    * @param {boolean} isTouch true if touch corner, false if normal corner
    */
   calcCornerCoords(
-    objectAngle: TDegree,
+    angle: TDegree,
     objectCornerSize: number,
     centerX: number,
     centerY: number,
-    isTouch: boolean
+    isTouch: boolean,
+    fabricObject: InteractiveFabricObject,
   ) {
-    let cosHalfOffset, sinHalfOffset, cosHalfOffsetComp, sinHalfOffsetComp;
-    const xSize = isTouch ? this.touchSizeX : this.sizeX,
-      ySize = isTouch ? this.touchSizeY : this.sizeY;
-    if (xSize && ySize && xSize !== ySize) {
-      // handle rectangular corners
-      const controlTriangleAngle = Math.atan2(ySize, xSize);
-      const cornerHypotenuse = Math.sqrt(xSize * xSize + ySize * ySize) / 2;
-      const newTheta = controlTriangleAngle - degreesToRadians(objectAngle);
-      const newThetaComp =
-        halfPI - controlTriangleAngle - degreesToRadians(objectAngle);
-      cosHalfOffset = cornerHypotenuse * cos(newTheta);
-      sinHalfOffset = cornerHypotenuse * sin(newTheta);
-      // use complementary angle for two corners
-      cosHalfOffsetComp = cornerHypotenuse * cos(newThetaComp);
-      sinHalfOffsetComp = cornerHypotenuse * sin(newThetaComp);
-    } else {
-      // handle square corners
-      // use default object corner size unless size is defined
-      const cornerSize = xSize && ySize ? xSize : objectCornerSize;
-      const cornerHypotenuse = cornerSize * Math.SQRT1_2;
-      // complementary angles are equal since they're both 45 degrees
-      const newTheta = degreesToRadians(45 - objectAngle);
-      cosHalfOffset = cosHalfOffsetComp = cornerHypotenuse * cos(newTheta);
-      sinHalfOffset = sinHalfOffsetComp = cornerHypotenuse * sin(newTheta);
-    }
-
+    const t = multiplyTransformMatrixArray([
+      createTranslateMatrix(centerX, centerY),
+      createRotateMatrix({ angle }),
+      createScaleMatrix(
+        (isTouch ? this.touchSizeX : this.sizeX) || objectCornerSize,
+        (isTouch ? this.touchSizeY : this.sizeY) || objectCornerSize,
+      ),
+    ]);
     return {
-      tl: new Point(centerX - sinHalfOffsetComp, centerY - cosHalfOffsetComp),
-      tr: new Point(centerX + cosHalfOffset, centerY - sinHalfOffset),
-      bl: new Point(centerX - cosHalfOffset, centerY + sinHalfOffset),
-      br: new Point(centerX + sinHalfOffsetComp, centerY + cosHalfOffsetComp),
+      tl: new Point(-0.5, -0.5).transform(t),
+      tr: new Point(0.5, -0.5).transform(t),
+      br: new Point(0.5, 0.5).transform(t),
+      bl: new Point(-0.5, 0.5).transform(t),
     };
   }
 
@@ -349,7 +350,7 @@ export class Control {
     left: number,
     top: number,
     styleOverride: ControlRenderingStyleOverride | undefined,
-    fabricObject: InteractiveFabricObject
+    fabricObject: InteractiveFabricObject,
   ) {
     styleOverride = styleOverride || {};
     switch (styleOverride.cornerStyle || fabricObject.cornerStyle) {
@@ -360,7 +361,7 @@ export class Control {
           left,
           top,
           styleOverride,
-          fabricObject
+          fabricObject,
         );
         break;
       default:
@@ -370,7 +371,7 @@ export class Control {
           left,
           top,
           styleOverride,
-          fabricObject
+          fabricObject,
         );
     }
   }

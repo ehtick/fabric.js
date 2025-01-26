@@ -1,23 +1,14 @@
+import { radiansToDegrees } from '../util/misc/radiansDegreesConversion';
 import { ColorNameMap } from './color_map';
 import { reHSLa, reHex, reRGBa } from './constants';
-import { hue2rgb, hexify } from './util';
-
-/**
- * RGB format
- */
-export type TRGBColorSource = [red: number, green: number, blue: number];
-
-/**
- * RGBA format
- */
-export type TRGBAColorSource = [
-  red: number,
-  green: number,
-  blue: number,
-  alpha: number
-];
-
-export type TColorArg = string | TRGBColorSource | TRGBAColorSource | Color;
+import type { TRGBAColorSource, TColorArg } from './typedefs';
+import {
+  hue2rgb,
+  hexify,
+  rgb2Hsl,
+  fromAlphaToFloat,
+  greyAverage,
+} from './util';
 
 /**
  * @class Color common color operations
@@ -25,6 +16,7 @@ export type TColorArg = string | TRGBColorSource | TRGBAColorSource | Color;
  */
 export class Color {
   private declare _source: TRGBAColorSource;
+  isUnrecognised = false;
 
   /**
    *
@@ -50,6 +42,7 @@ export class Color {
    * @returns {TRGBAColorSource}
    */
   protected _tryParsingColor(color: string) {
+    color = color.toLowerCase();
     if (color in ColorNameMap) {
       color = ColorNameMap[color as keyof typeof ColorNameMap];
     }
@@ -60,47 +53,8 @@ export class Color {
           Color.sourceFromHsl(color) ||
           // color is not recognized
           // we default to black as canvas does
-          ([0, 0, 0, 1] as TRGBAColorSource);
-  }
-
-  /**
-   * Adapted from {@link https://gist.github.com/mjackson/5311256 https://gist.github.com/mjackson}
-   * @private
-   * @param {Number} r Red color value
-   * @param {Number} g Green color value
-   * @param {Number} b Blue color value
-   * @return {TRGBColorSource} Hsl color
-   */
-  _rgbToHsl(r: number, g: number, b: number): TRGBColorSource {
-    r /= 255;
-    g /= 255;
-    b /= 255;
-    const maxValue = Math.max(r, g, b),
-      minValue = Math.min(r, g, b);
-
-    let h!: number, s: number;
-    const l = (maxValue + minValue) / 2;
-
-    if (maxValue === minValue) {
-      h = s = 0; // achromatic
-    } else {
-      const d = maxValue - minValue;
-      s = l > 0.5 ? d / (2 - maxValue - minValue) : d / (maxValue + minValue);
-      switch (maxValue) {
-        case r:
-          h = (g - b) / d + (g < b ? 6 : 0);
-          break;
-        case g:
-          h = (b - r) / d + 2;
-          break;
-        case b:
-          h = (r - g) / d + 4;
-          break;
-      }
-      h /= 6;
-    }
-
-    return [Math.round(h * 360), Math.round(s * 100), Math.round(l * 100)];
+          // eslint-disable-next-line no-constant-binary-expression
+          ((this.isUnrecognised = true) && ([0, 0, 0, 1] as TRGBAColorSource));
   }
 
   /**
@@ -124,8 +78,8 @@ export class Color {
    * @return {String} ex: rgb(0-255,0-255,0-255)
    */
   toRgb() {
-    const source = this.getSource();
-    return `rgb(${source[0]},${source[1]},${source[2]})`;
+    const [r, g, b] = this.getSource();
+    return `rgb(${r},${g},${b})`;
   }
 
   /**
@@ -133,8 +87,7 @@ export class Color {
    * @return {String} ex: rgba(0-255,0-255,0-255,0-1)
    */
   toRgba() {
-    const source = this.getSource();
-    return `rgba(${source[0]},${source[1]},${source[2]},${source[3]})`;
+    return `rgba(${this.getSource().join(',')})`;
   }
 
   /**
@@ -142,10 +95,8 @@ export class Color {
    * @return {String} ex: hsl(0-360,0%-100%,0%-100%)
    */
   toHsl() {
-    const source = this.getSource(),
-      hsl = this._rgbToHsl(source[0], source[1], source[2]);
-
-    return `hsl(${hsl[0]},${hsl[1]}%,${hsl[2]}%)`;
+    const [h, s, l] = rgb2Hsl(...this.getSource());
+    return `hsl(${h},${s}%,${l}%)`;
   }
 
   /**
@@ -153,10 +104,8 @@ export class Color {
    * @return {String} ex: hsla(0-360,0%-100%,0%-100%,0-1)
    */
   toHsla() {
-    const source = this.getSource(),
-      hsl = this._rgbToHsl(source[0], source[1], source[2]);
-
-    return `hsla(${hsl[0]},${hsl[1]}%,${hsl[2]}%,${source[3]})`;
+    const [h, s, l, a] = rgb2Hsl(...this.getSource());
+    return `hsla(${h},${s}%,${l}%,${a})`;
   }
 
   /**
@@ -164,8 +113,8 @@ export class Color {
    * @return {String} ex: FF5555
    */
   toHex() {
-    const [r, g, b] = this.getSource();
-    return `${hexify(r)}${hexify(g)}${hexify(b)}`;
+    const fullHex = this.toHexa();
+    return fullHex.slice(0, 6);
   }
 
   /**
@@ -173,8 +122,8 @@ export class Color {
    * @return {String} ex: FF5555CC
    */
   toHexa() {
-    const source = this.getSource();
-    return `${this.toHex()}${hexify(Math.round(source[3] * 255))}`;
+    const [r, g, b, a] = this.getSource();
+    return `${hexify(r)}${hexify(g)}${hexify(b)}${hexify(Math.round(a * 255))}`;
   }
 
   /**
@@ -191,9 +140,7 @@ export class Color {
    * @return {Color} thisArg
    */
   setAlpha(alpha: number) {
-    const source = this.getSource();
-    source[3] = alpha;
-    this.setSource(source);
+    this._source[3] = alpha;
     return this;
   }
 
@@ -202,13 +149,7 @@ export class Color {
    * @return {Color} thisArg
    */
   toGrayscale() {
-    const source = this.getSource(),
-      average = parseInt(
-        (source[0] * 0.3 + source[1] * 0.59 + source[2] * 0.11).toFixed(0),
-        10
-      ),
-      currentAlpha = source[3];
-    this.setSource([average, average, average, currentAlpha]);
+    this.setSource(greyAverage(this.getSource()));
     return this;
   }
 
@@ -218,14 +159,9 @@ export class Color {
    * @return {Color} thisArg
    */
   toBlackWhite(threshold: number) {
-    const source = this.getSource(),
-      currentAlpha = source[3];
-    let average = Math.round(
-      source[0] * 0.3 + source[1] * 0.59 + source[2] * 0.11
-    );
-
-    average = average < (threshold || 127) ? 0 : 255;
-    this.setSource([average, average, average, currentAlpha]);
+    const [average, , , a] = greyAverage(this.getSource()),
+      bOrW = average < (threshold || 127) ? 0 : 255;
+    this.setSource([bOrW, bOrW, bOrW, a]);
     return this;
   }
 
@@ -239,14 +175,14 @@ export class Color {
       otherColor = new Color(otherColor);
     }
 
-    const [r, g, b, alpha] = this.getSource(),
+    const source = this.getSource(),
       otherAlpha = 0.5,
       otherSource = otherColor.getSource(),
-      [R, G, B] = [r, g, b].map((value, index) =>
-        Math.round(value * (1 - otherAlpha) + otherSource[index] * otherAlpha)
+      [R, G, B] = source.map((value, index) =>
+        Math.round(value * (1 - otherAlpha) + otherSource[index] * otherAlpha),
       );
 
-    this.setSource([R, G, B, alpha]);
+    this.setSource([R, G, B, source[3]]);
     return this;
   }
 
@@ -279,19 +215,15 @@ export class Color {
    * @return {TRGBAColorSource | undefined} source
    */
   static sourceFromRgb(color: string): TRGBAColorSource | undefined {
-    const match = color.match(reRGBa);
+    const match = color.match(reRGBa());
     if (match) {
-      const r =
-          (parseInt(match[1], 10) / (/%$/.test(match[1]) ? 100 : 1)) *
-          (/%$/.test(match[1]) ? 255 : 1),
-        g =
-          (parseInt(match[2], 10) / (/%$/.test(match[2]) ? 100 : 1)) *
-          (/%$/.test(match[2]) ? 255 : 1),
-        b =
-          (parseInt(match[3], 10) / (/%$/.test(match[3]) ? 100 : 1)) *
-          (/%$/.test(match[3]) ? 255 : 1);
-
-      return [r, g, b, match[4] ? parseFloat(match[4]) : 1];
+      const [r, g, b] = match.slice(1, 4).map((value) => {
+        const parsedValue = parseFloat(value);
+        return value.endsWith('%')
+          ? Math.round(parsedValue * 2.55)
+          : parsedValue;
+      });
+      return [r, g, b, fromAlphaToFloat(match[4])];
     }
   }
 
@@ -326,14 +258,15 @@ export class Color {
    * @see http://http://www.w3.org/TR/css3-color/#hsl-color
    */
   static sourceFromHsl(color: string): TRGBAColorSource | undefined {
-    const match = color.match(reHSLa);
+    const match = color.match(reHSLa());
     if (!match) {
       return;
     }
+    const match1degrees = Color.parseAngletoDegrees(match[1]);
 
-    const h = (((parseFloat(match[1]) % 360) + 360) % 360) / 360,
-      s = parseFloat(match[2]) / (/%$/.test(match[2]) ? 100 : 1),
-      l = parseFloat(match[3]) / (/%$/.test(match[3]) ? 100 : 1);
+    const h = (((match1degrees % 360) + 360) % 360) / 360,
+      s = parseFloat(match[2]) / 100,
+      l = parseFloat(match[3]) / 100;
     let r: number, g: number, b: number;
 
     if (s === 0) {
@@ -351,7 +284,7 @@ export class Color {
       Math.round(r * 255),
       Math.round(g * 255),
       Math.round(b * 255),
-      match[4] ? parseFloat(match[4]) : 1,
+      fromAlphaToFloat(match[4]),
     ];
   }
 
@@ -374,31 +307,43 @@ export class Color {
    * @return {TRGBAColorSource | undefined} source
    */
   static sourceFromHex(color: string): TRGBAColorSource | undefined {
-    if (color.match(reHex)) {
+    if (color.match(reHex())) {
       const value = color.slice(color.indexOf('#') + 1),
-        isShortNotation = value.length === 3 || value.length === 4,
-        isRGBa = value.length === 8 || value.length === 4,
-        r = isShortNotation
-          ? value.charAt(0) + value.charAt(0)
-          : value.substring(0, 2),
-        g = isShortNotation
-          ? value.charAt(1) + value.charAt(1)
-          : value.substring(2, 4),
-        b = isShortNotation
-          ? value.charAt(2) + value.charAt(2)
-          : value.substring(4, 6),
-        a = isRGBa
-          ? isShortNotation
-            ? value.charAt(3) + value.charAt(3)
-            : value.substring(6, 8)
-          : 'FF';
-
-      return [
-        parseInt(r, 16),
-        parseInt(g, 16),
-        parseInt(b, 16),
-        parseFloat((parseInt(a, 16) / 255).toFixed(2)),
-      ];
+        isShortNotation = value.length <= 4;
+      let expandedValue: string[];
+      if (isShortNotation) {
+        expandedValue = value.split('').map((hex) => hex + hex);
+      } else {
+        expandedValue = value.match(/.{2}/g)!;
+      }
+      const [r, g, b, a = 255] = expandedValue.map((hexCouple) =>
+        parseInt(hexCouple, 16),
+      );
+      return [r, g, b, a / 255];
     }
+  }
+
+  /**
+   * Converts a string that could be any angle notation (50deg, 0.5turn, 2rad)
+   * into degrees without the 'deg' suffix
+   * @static
+   * @memberOf Color
+   * @param {String} value ex: 0deg, 0.5turn, 2rad
+   * @return {Number} number in degrees or NaN if inputs are invalid
+   */
+  static parseAngletoDegrees(value: string): number {
+    const lowercase = value.toLowerCase();
+    const numeric = parseFloat(lowercase);
+
+    if (lowercase.includes('rad')) {
+      return radiansToDegrees(numeric);
+    }
+
+    if (lowercase.includes('turn')) {
+      return numeric * 360;
+    }
+
+    // Value is probably just a number already in degrees eg '50'
+    return numeric;
   }
 }

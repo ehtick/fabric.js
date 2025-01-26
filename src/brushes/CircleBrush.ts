@@ -3,16 +3,11 @@ import type { Point } from '../Point';
 import { Shadow } from '../Shadow';
 import { Circle } from '../shapes/Circle';
 import { Group } from '../shapes/Group';
-import { getRandomInt } from '../util/internals';
+import { getRandomInt } from '../util/internals/getRandomInt';
 import type { Canvas } from '../canvas/Canvas';
 import { BaseBrush } from './BaseBrush';
-
-export type CircleBrushPoint = {
-  x: number;
-  y: number;
-  radius: number;
-  fill: string;
-};
+import type { CircleBrushPoint } from './typedefs';
+import { CENTER } from '../constants';
 
 export class CircleBrush extends BaseBrush {
   /**
@@ -105,8 +100,8 @@ export class CircleBrush extends BaseBrush {
           radius: point.radius,
           left: point.x,
           top: point.y,
-          originX: 'center',
-          originY: 'center',
+          originX: CENTER,
+          originY: CENTER,
           fill: point.fill,
         });
 

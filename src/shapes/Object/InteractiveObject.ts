@@ -1,9 +1,10 @@
-import { Point } from '../../Point';
-import type { AssertKeys, TCornerPoint, TDegree } from '../../typedefs';
+import { Point, ZERO } from '../../Point';
+import type { TCornerPoint, TDegree } from '../../typedefs';
 import { FabricObject } from './Object';
 import { degreesToRadians } from '../../util/misc/radiansDegreesConversion';
 import type { TQrDecomposeOut } from '../../util/misc/matrix';
 import {
+  calcDimensionsMatrix,
   createRotateMatrix,
   createTranslateMatrix,
   multiplyTransformMatrices,
@@ -17,19 +18,21 @@ import type { ControlRenderingStyleOverride } from '../../controls/controlRender
 import type { FabricObjectProps } from './types/FabricObjectProps';
 import type { TFabricObjectProps, SerializedObjectProps } from './types';
 import { createObjectDefaultControls } from '../../controls/commonControls';
+import { interactiveObjectDefaultValues } from './defaultValues';
+import { SCALE } from '../../constants';
 
-type TOCoord = Point & {
+export type TOCoord = Point & {
   corner: TCornerPoint;
   touchCorner: TCornerPoint;
 };
 
-type TControlSet = Record<string, Control>;
+export type TControlSet = Record<string, Control>;
 
-type TBorderRenderingStyleOverride = Partial<
+export type TBorderRenderingStyleOverride = Partial<
   Pick<InteractiveFabricObject, 'borderColor' | 'borderDashArray'>
 >;
 
-type TStyleOverride = ControlRenderingStyleOverride &
+export type TStyleOverride = ControlRenderingStyleOverride &
   TBorderRenderingStyleOverride &
   Partial<
     Pick<InteractiveFabricObject, 'hasBorders' | 'hasControls'> & {
@@ -37,25 +40,15 @@ type TStyleOverride = ControlRenderingStyleOverride &
     }
   >;
 
-export interface DragMethods {
-  shouldStartDragging(): boolean;
-  onDragStart(e: DragEvent): boolean;
-}
-
-export type FabricObjectWithDragSupport = InteractiveFabricObject & DragMethods;
-
-const interactiveDefaults = {};
-
 export class InteractiveFabricObject<
     Props extends TFabricObjectProps = Partial<FabricObjectProps>,
     SProps extends SerializedObjectProps = SerializedObjectProps,
-    EventSpec extends ObjectEvents = ObjectEvents
+    EventSpec extends ObjectEvents = ObjectEvents,
   >
   extends FabricObject<Props, SProps, EventSpec>
   implements FabricObjectProps
 {
   declare noScaleCache: boolean;
-  declare centeredScaling: false;
 
   declare snapAngle?: TDegree;
   declare snapThreshold?: TDegree;
@@ -94,13 +87,10 @@ export class InteractiveFabricObject<
   declare moveCursor: CSSStyleDeclaration['cursor'] | null;
 
   /**
-   * Describe object's corner position in canvas element coordinates.
-   * properties are depending on control keys and padding the main controls.
-   * each property is an object with x, y and corner.
-   * The `corner` property contains in a similar manner the 4 points of the
-   * interactive area of the corner.
-   * The coordinates depends from the controls positionHandler and are used
-   * to draw and locate controls
+   * The object's controls' position in viewport coordinates
+   * Calculated by {@link Control#positionHandler} and {@link Control#calcCornerCoords}, depending on {@link padding}.
+   * `corner/touchCorner` describe the 4 points forming the interactive area of the corner.
+   * Used to draw and locate controls.
    */
   declare oCoords: Record<string, TOCoord>;
 
@@ -145,14 +135,37 @@ export class InteractiveFabricObject<
 
   declare canvas?: Canvas;
 
-  static ownDefaults: Record<string, any> = interactiveDefaults;
+  static ownDefaults = interactiveObjectDefaultValues;
 
   static getDefaults(): Record<string, any> {
     return {
       ...super.getDefaults(),
-      controls: createObjectDefaultControls(),
       ...InteractiveFabricObject.ownDefaults,
     };
+  }
+
+  /**
+   * Constructor
+   * @param {Object} [options] Options object
+   */
+  constructor(options?: Props) {
+    super();
+    Object.assign(
+      this,
+      (this.constructor as typeof InteractiveFabricObject).createControls(),
+      InteractiveFabricObject.ownDefaults,
+    );
+    this.setOptions(options);
+  }
+
+  /**
+   * Creates the default control object.
+   * If you prefer to have on instance of controls shared among all objects
+   * make this function return an empty object and add controls to the ownDefaults
+   * @param {Object} [options] Options object
+   */
+  static createControls(): { controls: Record<string, Control> } {
+    return { controls: createObjectDefaultControls() };
   }
 
   /**
@@ -164,13 +177,29 @@ export class InteractiveFabricObject<
   _updateCacheCanvas() {
     const targetCanvas = this.canvas;
     if (this.noScaleCache && targetCanvas && targetCanvas._currentTransform) {
-      const target = targetCanvas._currentTransform.target,
-        action = targetCanvas._currentTransform.action;
-      if (this === (target as unknown as this) && action.startsWith('scale')) {
+      const transform = targetCanvas._currentTransform,
+        target = transform.target,
+        action = transform.action;
+      if (
+        this === (target as unknown as this) &&
+        action &&
+        action.startsWith(SCALE)
+      ) {
         return false;
       }
     }
     return super._updateCacheCanvas();
+  }
+
+  getActiveControl() {
+    const key = this.__corner;
+    return key
+      ? {
+          key,
+          control: this.controls[key],
+          coord: this.oCoords[key],
+        }
+      : undefined;
   }
 
   /**
@@ -184,46 +213,36 @@ export class InteractiveFabricObject<
    * @param {boolean} forTouch indicates if we are looking for interaction area with a touch action
    * @return {String|Boolean} corner code (tl, tr, bl, br, etc.), or 0 if nothing is found.
    */
-  _findTargetCorner(pointer: Point, forTouch = false): 0 | string {
-    if (
-      !this.hasControls ||
-      !this.canvas ||
-      (this.canvas._activeObject as unknown as this) !== this
-    ) {
-      return 0;
+  findControl(
+    pointer: Point,
+    forTouch = false,
+  ): { key: string; control: Control; coord: TOCoord } | undefined {
+    if (!this.hasControls || !this.canvas) {
+      return undefined;
     }
 
     this.__corner = undefined;
-    // had to keep the reverse loop because was breaking tests
     const cornerEntries = Object.entries(this.oCoords);
     for (let i = cornerEntries.length - 1; i >= 0; i--) {
-      const [cornerKey, corner] = cornerEntries[i];
-      if (!this.isControlVisible(cornerKey)) {
-        continue;
+      const [key, corner] = cornerEntries[i];
+      const control = this.controls[key];
+
+      if (
+        control.shouldActivate(
+          key,
+          this,
+          pointer,
+          forTouch ? corner.touchCorner : corner.corner,
+        )
+      ) {
+        // this.canvas.contextTop.fillRect(pointer.x - 1, pointer.y - 1, 2, 2);
+        this.__corner = key;
+
+        return { key, control, coord: this.oCoords[key] };
       }
-      const lines = this._getImageLines(
-        forTouch ? corner.touchCorner : corner.corner
-      );
-      const xPoints = this._findCrossPoints(pointer, lines);
-      if (xPoints !== 0 && xPoints % 2 === 1) {
-        this.__corner = cornerKey;
-        return cornerKey;
-      }
-      // // debugging
-      //
-      // this.canvas.contextTop.fillRect(lines.bottomline.d.x, lines.bottomline.d.y, 2, 2);
-      // this.canvas.contextTop.fillRect(lines.bottomline.o.x, lines.bottomline.o.y, 2, 2);
-      //
-      // this.canvas.contextTop.fillRect(lines.leftline.d.x, lines.leftline.d.y, 2, 2);
-      // this.canvas.contextTop.fillRect(lines.leftline.o.x, lines.leftline.o.y, 2, 2);
-      //
-      // this.canvas.contextTop.fillRect(lines.topline.d.x, lines.topline.d.y, 2, 2);
-      // this.canvas.contextTop.fillRect(lines.topline.o.x, lines.topline.o.y, 2, 2);
-      //
-      // this.canvas.contextTop.fillRect(lines.rightline.d.x, lines.rightline.d.y, 2, 2);
-      // this.canvas.contextTop.fillRect(lines.rightline.o.x, lines.rightline.o.y, 2, 2);
     }
-    return 0;
+
+    return undefined;
   }
 
   /**
@@ -252,8 +271,13 @@ export class InteractiveFabricObject<
       ]),
       transformOptions = this.group
         ? qrDecompose(this.calcTransformMatrix())
-        : undefined,
-      dim = this._calculateCurrentDimensions(transformOptions),
+        : undefined;
+    // decomposing could bring negative scaling and `_calculateCurrentDimensions` can't take it
+    if (transformOptions) {
+      transformOptions.scaleX = Math.abs(transformOptions.scaleX);
+      transformOptions.scaleY = Math.abs(transformOptions.scaleY);
+    }
+    const dim = this._calculateCurrentDimensions(transformOptions),
       coords: Record<string, TOCoord> = {};
 
     this.forEachControl((control, key) => {
@@ -263,7 +287,7 @@ export class InteractiveFabricObject<
       // don't remove this assign for an object spread.
       coords[key] = Object.assign(
         position,
-        this._calcCornerCoords(control, position)
+        this._calcCornerCoords(control, position),
       );
     });
 
@@ -291,35 +315,34 @@ export class InteractiveFabricObject<
    * @private
    */
   private _calcCornerCoords(control: Control, position: Point) {
+    const angle = this.getTotalAngle();
     const corner = control.calcCornerCoords(
-      this.angle,
+      angle,
       this.cornerSize,
       position.x,
       position.y,
-      false
+      false,
+      this,
     );
     const touchCorner = control.calcCornerCoords(
-      this.angle,
+      angle,
       this.touchCornerSize,
       position.x,
       position.y,
-      true
+      true,
+      this,
     );
     return { corner, touchCorner };
   }
 
   /**
-   * Sets corner and controls position coordinates based on current angle, width and height, left and top.
-   * oCoords are used to find the corners
-   * aCoords are used to quickly find an object on the canvas
-   * lineCoords are used to quickly find object during pointer events.
+   * @override set controls' coordinates as well
    * See {@link https://github.com/fabricjs/fabric.js/wiki/When-to-call-setCoords} and {@link http://fabricjs.com/fabric-gotchas}
    * @return {void}
    */
   setCoords(): void {
     super.setCoords();
-    // set coordinates of the draggable boxes in the corners used to scale/rotate the image
-    this.oCoords = this.calcOCoords();
+    this.canvas && (this.oCoords = this.calcOCoords());
   }
 
   /**
@@ -331,8 +354,8 @@ export class InteractiveFabricObject<
     fn: (
       control: Control,
       key: string,
-      fabricObject: InteractiveFabricObject
-    ) => any
+      fabricObject: InteractiveFabricObject,
+    ) => any,
   ) {
     for (const i in this.controls) {
       fn(this.controls[i], i, this);
@@ -352,7 +375,6 @@ export class InteractiveFabricObject<
   drawSelectionBackground(ctx: CanvasRenderingContext2D): void {
     if (
       !this.selectionBackgroundColor ||
-      (this.canvas && !this.canvas.interactive) ||
       (this.canvas && (this.canvas._activeObject as unknown as this) !== this)
     ) {
       return;
@@ -387,7 +409,7 @@ export class InteractiveFabricObject<
   _drawBorders(
     ctx: CanvasRenderingContext2D,
     size: Point,
-    styleOverride: TStyleOverride = {}
+    styleOverride: TStyleOverride = {},
   ): void {
     const options = {
       hasControls: this.hasControls,
@@ -412,7 +434,7 @@ export class InteractiveFabricObject<
    */
   _renderControls(
     ctx: CanvasRenderingContext2D,
-    styleOverride: TStyleOverride = {}
+    styleOverride: TStyleOverride = {},
   ) {
     const { hasBorders, hasControls } = this;
     const styleOptions = {
@@ -427,8 +449,13 @@ export class InteractiveFabricObject<
     const options = qrDecompose(matrix);
     ctx.save();
     ctx.translate(options.translateX, options.translateY);
-    ctx.lineWidth = 1 * this.borderScaleFactor;
-    if (!this.group) {
+    ctx.lineWidth = this.borderScaleFactor; // 1 * this.borderScaleFactor;
+    // since interactive groups have been introduced, an object could be inside a group and needing controls
+    // the following equality check `this.group === this.parent` covers:
+    // object without a group ( undefined === undefined )
+    // object inside a group
+    // excludes object inside a group but multi selected since group and parent will differ in value
+    if (this.group === this.parent) {
       ctx.globalAlpha = this.isMoving ? this.borderOpacityWhenMoving : 1;
     }
     if (this.flipX) {
@@ -451,22 +478,30 @@ export class InteractiveFabricObject<
   drawBorders(
     ctx: CanvasRenderingContext2D,
     options: TQrDecomposeOut,
-    styleOverride: TStyleOverride
+    styleOverride: TStyleOverride,
   ): void {
     let size;
     if ((styleOverride && styleOverride.forActiveSelection) || this.group) {
-      const bbox = sizeAfterTransform(this.width, this.height, options),
-        stroke = (
-          this.strokeUniform
-            ? new Point().scalarAdd(this.canvas ? this.canvas.getZoom() : 1)
-            : // this is extremely confusing. options comes from the upper function
-              // and is the qrDecompose of a matrix that takes in account zoom too
-              new Point(options.scaleX, options.scaleY)
-        ).scalarMultiply(this.strokeWidth);
-      size = bbox.add(stroke).scalarAdd(this.borderScaleFactor);
+      const bbox = sizeAfterTransform(
+          this.width,
+          this.height,
+          calcDimensionsMatrix(options),
+        ),
+        stroke = !this.isStrokeAccountedForInDimensions()
+          ? (this.strokeUniform
+              ? new Point().scalarAdd(this.canvas ? this.canvas.getZoom() : 1)
+              : // this is extremely confusing. options comes from the upper function
+                // and is the qrDecompose of a matrix that takes in account zoom too
+                new Point(options.scaleX, options.scaleY)
+            ).scalarMultiply(this.strokeWidth)
+          : ZERO;
+      size = bbox
+        .add(stroke)
+        .scalarAdd(this.borderScaleFactor)
+        .scalarAdd(this.padding * 2);
     } else {
       size = this._calculateCurrentDimensions().scalarAdd(
-        this.borderScaleFactor
+        this.borderScaleFactor,
       );
     }
     this._drawBorders(ctx, size, styleOverride);
@@ -481,7 +516,7 @@ export class InteractiveFabricObject<
    */
   drawControlsConnectingLines(
     ctx: CanvasRenderingContext2D,
-    size: Point
+    size: Point,
   ): void {
     let shouldStroke = false;
 
@@ -495,7 +530,7 @@ export class InteractiveFabricObject<
         ctx.moveTo(control.x * size.x, control.y * size.y);
         ctx.lineTo(
           control.x * size.x + control.offsetX,
-          control.y * size.y + control.offsetY
+          control.y * size.y + control.offsetY,
         );
       }
     });
@@ -506,12 +541,15 @@ export class InteractiveFabricObject<
    * Draws corners of an object's bounding box.
    * Requires public properties: width, height
    * Requires public options: cornerSize, padding
+   * Be aware that since fabric 6.0 this function does not call setCoords anymore.
+   * setCoords needs to be called manually if the object of which we are rendering controls
+   * is outside the standard selection and transform process.
    * @param {CanvasRenderingContext2D} ctx Context to draw on
    * @param {ControlRenderingStyleOverride} styleOverride object to override the object style
    */
   drawControls(
     ctx: CanvasRenderingContext2D,
-    styleOverride: ControlRenderingStyleOverride = {}
+    styleOverride: ControlRenderingStyleOverride = {},
   ) {
     ctx.save();
     const retinaScaling = this.getCanvasRetinaScaling();
@@ -528,7 +566,6 @@ export class InteractiveFabricObject<
       ctx.strokeStyle = options.cornerStrokeColor;
     }
     this._setLineDash(ctx, options.cornerDashArray);
-    this.setCoords();
     this.forEachControl((control, key) => {
       if (control.getVisibility(this, key)) {
         const p = this.oCoords[key];
@@ -573,7 +610,7 @@ export class InteractiveFabricObject<
    */
   setControlsVisibility(options: Record<string, boolean> = {}) {
     Object.entries(options).forEach(([controlKey, visibility]) =>
-      this.setControlVisible(controlKey, visibility)
+      this.setControlVisible(controlKey, visibility),
     );
   }
 
@@ -588,7 +625,7 @@ export class InteractiveFabricObject<
    * with the object transformMatrix, or restored to neutral transform
    */
   clearContextTop(
-    restoreManually?: boolean
+    restoreManually?: boolean,
   ): CanvasRenderingContext2D | undefined {
     if (!this.canvas) {
       return;
@@ -613,13 +650,15 @@ export class InteractiveFabricObject<
   /**
    * This callback function is called every time _discardActiveObject or _setActiveObject
    * try to to deselect this object. If the function returns true, the process is cancelled
-   * @param {Object} [options] options sent from the upper functions
+   * @param {Object} [_options] options sent from the upper functions
    * @param {TPointerEvent} [options.e] event if the process is generated by an event
    * @param {FabricObject} [options.object] next object we are setting as active, and reason why
    * this is being deselected
-
    */
-  onDeselect(options?: { e?: TPointerEvent; object?: FabricObject }): boolean {
+  onDeselect(_options?: {
+    e?: TPointerEvent;
+    object?: InteractiveFabricObject;
+  }): boolean {
     // implemented by sub-classes, as needed.
     return false;
   }
@@ -627,22 +666,39 @@ export class InteractiveFabricObject<
   /**
    * This callback function is called every time _discardActiveObject or _setActiveObject
    * try to to select this object. If the function returns true, the process is cancelled
-   * @param {Object} [options] options sent from the upper functions
-   * @param {Event} [options.e] event if the process is generated by an event
+   * @param {Object} [_options] options sent from the upper functions
+   * @param {Event} [_options.e] event if the process is generated by an event
    */
-  onSelect(options?: { e?: TPointerEvent }): boolean {
+  onSelect(_options?: { e?: TPointerEvent }): boolean {
     // implemented by sub-classes, as needed.
     return false;
   }
 
   /**
-   * Override to customize drag and drop behavior
-   * return true if the object currently dragged can be dropped on the target
-   * @public
-   * @param {DragEvent} e
-   * @returns {boolean}
+   * Override to customize Drag behavior
+   * Fired from {@link Canvas#_onMouseMove}
+   * @returns true in order for the window to start a drag session
    */
-  canDrop(e: DragEvent): boolean {
+  shouldStartDragging(_e: TPointerEvent) {
+    return false;
+  }
+
+  /**
+   * Override to customize Drag behavior\
+   * Fired once a drag session has started
+   * @returns true to handle the drag event
+   */
+  onDragStart(_e: DragEvent) {
+    return false;
+  }
+
+  /**
+   * Override to customize drag and drop behavior
+   * @public
+   * @param {DragEvent} _e
+   * @returns {boolean} true if the object currently dragged can be dropped on the target
+   */
+  canDrop(_e: DragEvent): boolean {
     return false;
   }
 
@@ -651,10 +707,9 @@ export class InteractiveFabricObject<
    * render a specific effect when an object is the source of a drag event
    * example: render the selection status for the part of text that is being dragged from a text object
    * @public
-   * @param {DragEvent} e
-   * @returns {boolean}
+   * @param {DragEvent} _e
    */
-  renderDragSourceEffect(this: AssertKeys<this, 'canvas'>, e: DragEvent) {
+  renderDragSourceEffect(_e: DragEvent) {
     // for subclasses
   }
 
@@ -664,10 +719,9 @@ export class InteractiveFabricObject<
    * used to show that the underly object can receive a drop, or to show how the
    * object will change when dropping. example: show the cursor where the text is about to be dropped
    * @public
-   * @param {DragEvent} e
-   * @returns {boolean}
+   * @param {DragEvent} _e
    */
-  renderDropTargetEffect(this: AssertKeys<this, 'canvas'>, e: DragEvent) {
+  renderDropTargetEffect(_e: DragEvent) {
     // for subclasses
   }
 }

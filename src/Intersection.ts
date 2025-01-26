@@ -34,7 +34,7 @@ export class Intersection {
     this.points = this.points.concat(
       points.filter((point) => {
         return !this.includes(point);
-      })
+      }),
     );
     return this;
   }
@@ -82,6 +82,36 @@ export class Intersection {
   }
 
   /**
+   * Use the ray casting algorithm to determine if {@link point} is in the polygon defined by {@link points}
+   * @see https://en.wikipedia.org/wiki/Point_in_polygon
+   * @param point
+   * @param points polygon points
+   * @returns
+   */
+  static isPointInPolygon(point: Point, points: Point[]) {
+    const other = new Point(point).setX(
+      Math.min(point.x - 1, ...points.map((p) => p.x)),
+    );
+    let hits = 0;
+    for (let index = 0; index < points.length; index++) {
+      const inter = this.intersectSegmentSegment(
+        // polygon side
+        points[index],
+        points[(index + 1) % points.length],
+        // ray
+        point,
+        other,
+      );
+      if (inter.includes(point)) {
+        // point is on the polygon side
+        return true;
+      }
+      hits += Number(inter.status === 'Intersection');
+    }
+    return hits % 2 === 1;
+  }
+
+  /**
    * Checks if a line intersects another
    * @see {@link https://en.wikipedia.org/wiki/Line%E2%80%93line_intersection line intersection}
    * @see {@link https://en.wikipedia.org/wiki/Cramer%27s_rule Cramer's rule}
@@ -100,7 +130,7 @@ export class Intersection {
     b1: Point,
     b2: Point,
     aInfinite = true,
-    bInfinite = true
+    bInfinite = true,
   ): Intersection {
     const a2xa1x = a2.x - a1.x,
       a2ya1y = a2.y - a1.y,
@@ -119,7 +149,7 @@ export class Intersection {
         (bInfinite || (0 <= ub && ub <= 1))
       ) {
         return new Intersection('Intersection').append(
-          new Point(a1.x + ua * a2xa1x, a1.y + ua * a2ya1y)
+          new Point(a1.x + ua * a2xa1x, a1.y + ua * a2ya1y),
         );
       } else {
         return new Intersection();
@@ -154,7 +184,7 @@ export class Intersection {
     s1: Point,
     s2: Point,
     l1: Point,
-    l2: Point
+    l2: Point,
   ): Intersection {
     return Intersection.intersectLineLine(s1, s2, l1, l2, false, true);
   }
@@ -173,7 +203,7 @@ export class Intersection {
     a1: Point,
     a2: Point,
     b1: Point,
-    b2: Point
+    b2: Point,
   ): Intersection {
     return Intersection.intersectLineLine(a1, a2, b1, b2, false, false);
   }
@@ -195,7 +225,7 @@ export class Intersection {
     a1: Point,
     a2: Point,
     points: Point[],
-    infinite = true
+    infinite = true,
   ): Intersection {
     const result = new Intersection();
     const length = points.length;
@@ -229,7 +259,7 @@ export class Intersection {
   static intersectSegmentPolygon(
     a1: Point,
     a2: Point,
-    points: Point[]
+    points: Point[],
   ): Intersection {
     return Intersection.intersectLinePolygon(a1, a2, points, false);
   }
@@ -246,7 +276,7 @@ export class Intersection {
    */
   static intersectPolygonPolygon(
     points1: Point[],
-    points2: Point[]
+    points2: Point[],
   ): Intersection {
     const result = new Intersection(),
       length = points1.length;
@@ -285,7 +315,7 @@ export class Intersection {
   static intersectPolygonRectangle(
     points: Point[],
     r1: Point,
-    r2: Point
+    r2: Point,
   ): Intersection {
     const min = r1.min(r2),
       max = r1.max(r2),
