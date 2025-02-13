@@ -4,15 +4,17 @@ import type {
   TPointerEventInfo,
 } from '../../EventTypeDefs';
 import { Point } from '../../Point';
-import type { FabricObject } from '../Object/Object';
-import { Text } from '../Text/Text';
+import type { FabricObject } from '../Object/FabricObject';
+import { FabricText } from '../Text/Text';
 import { animate } from '../../util/animation/animate';
 import type { TOnAnimationChangeCallback } from '../../util/animation/types';
 import type { ValueAnimation } from '../../util/animation/ValueAnimation';
 import type { TextStyleDeclaration } from '../Text/StyledText';
 import type { SerializedTextProps, TextProps } from '../Text/Text';
-import type { TProps } from '../Object/types';
+import type { TOptions } from '../../typedefs';
 import { getDocumentFromElement } from '../../util/dom_misc';
+import { LEFT, MODIFIED, RIGHT, reNewline } from '../../constants';
+import type { IText } from './IText';
 
 /**
  *  extend this regex to support non english languages
@@ -38,10 +40,10 @@ export type ITextEvents = ObjectEvents & {
 };
 
 export abstract class ITextBehavior<
-  Props extends TProps<TextProps> = Partial<TextProps>,
+  Props extends TOptions<TextProps> = Partial<TextProps>,
   SProps extends SerializedTextProps = SerializedTextProps,
-  EventSpec extends ITextEvents = ITextEvents
-> extends Text<Props, SProps, EventSpec> {
+  EventSpec extends ITextEvents = ITextEvents,
+> extends FabricText<Props, SProps, EventSpec> {
   declare abstract isEditing: boolean;
   declare abstract cursorDelay: number;
   declare abstract selectionStart: number;
@@ -88,7 +90,7 @@ export abstract class ITextBehavior<
   abstract getSelectionStartFromPointer(e: TPointerEvent): number;
   abstract _getCursorBoundaries(
     index: number,
-    skipCaching?: boolean
+    skipCaching?: boolean,
   ): {
     left: number;
     top: number;
@@ -132,13 +134,10 @@ export abstract class ITextBehavior<
       duration,
       delay,
       onComplete,
-      abort: () => {
-        return (
-          !this.canvas ||
-          // we do not want to animate a selection, only cursor
-          this.selectionStart !== this.selectionEnd
-        );
-      },
+      abort: () =>
+        !this.canvas ||
+        // we do not want to animate a selection, only cursor
+        this.selectionStart !== this.selectionEnd,
       onChange: (value) => {
         this._currentCursorOpacity = value;
         this.renderCursorOrSelection();
@@ -146,21 +145,26 @@ export abstract class ITextBehavior<
     });
   }
 
+  /**
+   * changes the cursor from visible to invisible
+   */
   private _tick(delay?: number) {
     this._currentTickState = this._animateCursor({
-      toValue: 1,
-      duration: this.cursorDuration,
-      delay,
+      toValue: 0,
+      duration: this.cursorDuration / 2,
+      delay: Math.max(delay || 0, 100),
       onComplete: this._onTickComplete,
     });
   }
 
+  /**
+   * Changes the cursor from invisible to visible
+   */
   private _onTickComplete() {
     this._currentTickCompleteState?.abort();
     this._currentTickCompleteState = this._animateCursor({
-      toValue: 0,
-      duration: this.cursorDuration / 2,
-      delay: 100,
+      toValue: 1,
+      duration: this.cursorDuration,
       onComplete: this._tick,
     });
   }
@@ -184,7 +188,7 @@ export abstract class ITextBehavior<
           shouldClear = true;
           cursorAnimation.abort();
         }
-      }
+      },
     );
 
     this._currentCursorOpacity = 1;
@@ -195,10 +199,14 @@ export abstract class ITextBehavior<
     }
   }
 
+  /**
+   * Restart tue cursor animation if either is in complete state ( between animations )
+   * or if it never started before
+   */
   restartCursorIfNeeded() {
     if (
       [this._currentTickState, this._currentTickCompleteState].some(
-        (cursorAnimation) => !cursorAnimation || cursorAnimation.isDone()
+        (cursorAnimation) => !cursorAnimation || cursorAnimation.isDone(),
       )
     ) {
       this.initDelayedCursor();
@@ -312,37 +320,41 @@ export abstract class ITextBehavior<
    * @param {Number} direction 1 or -1
    * @return {Number} Index of the beginning or end of a word
    */
-  searchWordBoundary(selectionStart: number, direction: number): number {
+  searchWordBoundary(selectionStart: number, direction: 1 | -1): number {
     const text = this._text;
-    let index = this._reSpace.test(text[selectionStart])
-        ? selectionStart - 1
-        : selectionStart,
+    // if we land on a space we move the cursor backwards
+    // if we are searching boundary end we move the cursor backwards ONLY if we don't land on a line break
+    let index =
+        selectionStart > 0 &&
+        this._reSpace.test(text[selectionStart]) &&
+        (direction === -1 || !reNewline.test(text[selectionStart - 1]))
+          ? selectionStart - 1
+          : selectionStart,
       _char = text[index];
-
-    while (!reNonWord.test(_char) && index > 0 && index < text.length) {
+    while (index > 0 && index < text.length && !reNonWord.test(_char)) {
       index += direction;
       _char = text[index];
     }
-    if (reNonWord.test(_char)) {
-      index += direction === 1 ? 0 : 1;
+    if (direction === -1 && reNonWord.test(_char)) {
+      index++;
     }
     return index;
   }
 
   /**
+   * TODO fix: selectionStart set as 0 will be ignored?
    * Selects a word based on the index
    * @param {Number} selectionStart Index of a character
    */
-  selectWord(selectionStart: number) {
+  selectWord(selectionStart?: number) {
     selectionStart = selectionStart || this.selectionStart;
-    const newSelectionStart = this.searchWordBoundary(
-        selectionStart,
-        -1
-      ) /* search backwards */,
-      newSelectionEnd = this.searchWordBoundary(
-        selectionStart,
-        1
-      ); /* search forward */
+    // search backwards
+    const newSelectionStart = this.searchWordBoundary(selectionStart, -1),
+      // search forward
+      newSelectionEnd = Math.max(
+        newSelectionStart,
+        this.searchWordBoundary(selectionStart, 1),
+      );
 
     this.selectionStart = newSelectionStart;
     this.selectionEnd = newSelectionEnd;
@@ -352,10 +364,11 @@ export abstract class ITextBehavior<
   }
 
   /**
+   * TODO fix: selectionStart set as 0 will be ignored?
    * Selects a line based on the index
    * @param {Number} selectionStart Index of a character
    */
-  selectLine(selectionStart: number) {
+  selectLine(selectionStart?: number) {
     selectionStart = selectionStart || this.selectionStart;
     const newSelectionStart = this.findLineBoundaryLeft(selectionStart),
       newSelectionEnd = this.findLineBoundaryRight(selectionStart);
@@ -370,10 +383,26 @@ export abstract class ITextBehavior<
   /**
    * Enters editing state
    */
-  enterEditing(e: TPointerEvent) {
+  enterEditing(e?: TPointerEvent) {
     if (this.isEditing || !this.editable) {
       return;
     }
+    this.enterEditingImpl();
+    this.fire('editing:entered', e ? { e } : undefined);
+    this._fireSelectionChanged();
+    if (this.canvas) {
+      this.canvas.fire('text:editing:entered', {
+        target: this as unknown as IText,
+        e,
+      });
+      this.canvas.requestRenderAll();
+    }
+  }
+
+  /**
+   * runs the actual logic that enter from editing state, see {@link enterEditing}
+   */
+  enterEditingImpl() {
     if (this.canvas) {
       this.canvas.calcOffset();
       this.canvas.textEditingManager.exitTextEditing();
@@ -390,19 +419,16 @@ export abstract class ITextBehavior<
     this._textBeforeEdit = this.text;
 
     this._tick();
-    this.fire('editing:entered', { e });
-    this._fireSelectionChanged();
-    if (this.canvas) {
-      // @ts-expect-error in reality it is an IText instance
-      this.canvas.fire('text:editing:entered', { target: this, e });
-      this.canvas.requestRenderAll();
-    }
   }
 
   /**
-   * called by {@link canvas#textEditingManager}
+   * called by {@link Canvas#textEditingManager}
    */
   updateSelectionOnMouseMove(e: TPointerEvent) {
+    if (this.getActiveControl()) {
+      return;
+    }
+
     const el = this.hiddenTextarea!;
     // regain focus
     getDocumentFromElement(el).activeElement !== el && el.focus();
@@ -472,7 +498,7 @@ export abstract class ITextBehavior<
   fromGraphemeToStringSelection(
     start: number,
     end: number,
-    graphemes: string[]
+    graphemes: string[],
   ) {
     const smallerTextStart = graphemes.slice(0, start),
       graphemeStart = smallerTextStart.join('').length;
@@ -499,7 +525,7 @@ export abstract class ITextBehavior<
       const newSelection = this.fromGraphemeToStringSelection(
         this.selectionStart,
         this.selectionEnd,
-        this._text
+        this._text,
       );
       this.hiddenTextarea.selectionStart = newSelection.selectionStart;
       this.hiddenTextarea.selectionEnd = newSelection.selectionEnd;
@@ -523,7 +549,7 @@ export abstract class ITextBehavior<
     const newSelection = this.fromStringToGraphemeSelection(
       textarea.selectionStart,
       textarea.selectionEnd,
-      textarea.value
+      textarea.value,
     );
     this.selectionEnd = this.selectionStart = newSelection.selectionEnd;
     if (!this.inCompositionMode) {
@@ -571,15 +597,15 @@ export abstract class ITextBehavior<
 
     const p = new Point(
       boundaries.left + leftOffset,
-      boundaries.top + boundaries.topOffset + charHeight
+      boundaries.top + boundaries.topOffset + charHeight,
     )
       .transform(this.calcTransformMatrix())
       .transform(this.canvas.viewportTransform)
       .multiply(
         new Point(
           upperCanvas.clientWidth / upperCanvasWidth,
-          upperCanvas.clientHeight / upperCanvasHeight
-        )
+          upperCanvas.clientHeight / upperCanvasHeight,
+        ),
       );
 
     if (p.x < 0) {
@@ -650,6 +676,9 @@ export abstract class ITextBehavior<
 
   /**
    * runs the actual logic that exits from editing state, see {@link exitEditing}
+   * Please use exitEditingImpl, this function was kept to avoid breaking changes.
+   * Will be removed in fabric 7.0
+   * @deprecated use "exitEditingImpl"
    */
   protected _exitEditing() {
     const hiddenTextarea = this.hiddenTextarea;
@@ -663,6 +692,21 @@ export abstract class ITextBehavior<
     }
     this.hiddenTextarea = null;
     this.abortCursorAnimation();
+    this.selectionStart !== this.selectionEnd && this.clearContextTop();
+  }
+
+  /**
+   * runs the actual logic that exits from editing state, see {@link exitEditing}
+   * But it does not fire events
+   */
+  exitEditingImpl() {
+    this._exitEditing();
+    this.selectionEnd = this.selectionStart;
+    this._restoreEditingProps();
+    if (this._forceClearCache) {
+      this.initDimensions();
+      this.setCoords();
+    }
   }
 
   /**
@@ -670,18 +714,15 @@ export abstract class ITextBehavior<
    */
   exitEditing() {
     const isTextChanged = this._textBeforeEdit !== this.text;
-    this.selectionEnd = this.selectionStart;
-    this._exitEditing();
-    this._restoreEditingProps();
-    if (this._forceClearCache) {
-      this.initDimensions();
-      this.setCoords();
-    }
+    this.exitEditingImpl();
+
     this.fire('editing:exited');
-    isTextChanged && this.fire('modified');
+    isTextChanged && this.fire(MODIFIED);
     if (this.canvas) {
-      // @ts-expect-error in reality it is an IText instance
-      this.canvas.fire('text:editing:exited', { target: this });
+      this.canvas.fire('text:editing:exited', {
+        target: this as unknown as IText,
+      });
+      // todo: evaluate add an action to this event
       isTextChanged && this.canvas.fire('object:modified', { target: this });
     }
     return this;
@@ -708,7 +749,7 @@ export abstract class ITextBehavior<
         this.get2DCursorLocation(start, true),
       { lineIndex: lineEnd, charIndex: charEnd } = this.get2DCursorLocation(
         end,
-        true
+        true,
       );
     if (lineStart !== lineEnd) {
       // step1 remove the trailing of lineStart
@@ -792,12 +833,13 @@ export abstract class ITextBehavior<
     lineIndex: number,
     charIndex: number,
     qty: number,
-    copiedStyle?: { [index: number]: TextStyleDeclaration }
+    copiedStyle?: { [index: number]: TextStyleDeclaration },
   ) {
     const newLineStyles: { [index: number]: TextStyleDeclaration } = {};
-    const isEndOfLine =
-      this._unwrappedTextLines[lineIndex].length === charIndex;
-    let somethingAdded = false;
+    const originalLineLength = this._unwrappedTextLines[lineIndex].length;
+    const isEndOfLine = originalLineLength === charIndex;
+
+    let someStyleIsCarryingOver = false;
     qty || (qty = 1);
     this.shiftLineStyles(lineIndex, qty);
     const currentCharStyle = this.styles[lineIndex]
@@ -809,7 +851,7 @@ export abstract class ITextBehavior<
     for (const index in this.styles[lineIndex]) {
       const numIndex = parseInt(index, 10);
       if (numIndex >= charIndex) {
-        somethingAdded = true;
+        someStyleIsCarryingOver = true;
         newLineStyles[numIndex - charIndex] = this.styles[lineIndex][index];
         // remove lines from the previous line since they're on a new line now
         if (!(isEndOfLine && charIndex === 0)) {
@@ -818,14 +860,16 @@ export abstract class ITextBehavior<
       }
     }
     let styleCarriedOver = false;
-    if (somethingAdded && !isEndOfLine) {
+    if (someStyleIsCarryingOver && !isEndOfLine) {
       // if is end of line, the extra style we copied
       // is probably not something we want
       this.styles[lineIndex + qty] = newLineStyles;
       styleCarriedOver = true;
     }
-    if (styleCarriedOver) {
+    if (styleCarriedOver || originalLineLength > charIndex) {
       // skip the last line of since we already prepared it.
+      // or contains text without style that we don't want to style
+      // just because it changed lines
       qty--;
     }
     // for the all the lines or all the other lines
@@ -858,7 +902,7 @@ export abstract class ITextBehavior<
     lineIndex: number,
     charIndex: number,
     quantity: number,
-    copiedStyle?: TextStyleDeclaration[]
+    copiedStyle?: TextStyleDeclaration[],
   ) {
     if (!this.styles) {
       this.styles = {};
@@ -915,7 +959,7 @@ export abstract class ITextBehavior<
   insertNewStyleBlock(
     insertedText: string[],
     start: number,
-    copiedStyle?: TextStyleDeclaration[]
+    copiedStyle?: TextStyleDeclaration[],
   ) {
     const cursorLoc = this.get2DCursorLocation(start, true),
       addedLines = [0];
@@ -935,7 +979,7 @@ export abstract class ITextBehavior<
         cursorLoc.lineIndex,
         cursorLoc.charIndex,
         addedLines[0],
-        copiedStyle
+        copiedStyle,
       );
       copiedStyle = copiedStyle && copiedStyle.slice(addedLines[0] + 1);
     }
@@ -943,7 +987,7 @@ export abstract class ITextBehavior<
       this.insertNewlineStyleObject(
         cursorLoc.lineIndex,
         cursorLoc.charIndex + addedLines[0],
-        linesLength
+        linesLength,
       );
     let i;
     for (i = 1; i < linesLength; i++) {
@@ -952,7 +996,7 @@ export abstract class ITextBehavior<
           cursorLoc.lineIndex + i,
           0,
           addedLines[i],
-          copiedStyle
+          copiedStyle,
         );
       } else if (copiedStyle) {
         // this test is required in order to close #6841
@@ -970,7 +1014,7 @@ export abstract class ITextBehavior<
         cursorLoc.lineIndex + i,
         0,
         addedLines[i],
-        copiedStyle
+        copiedStyle,
       );
     }
   }
@@ -1008,7 +1052,7 @@ export abstract class ITextBehavior<
     text: string,
     style: TextStyleDeclaration[] | undefined,
     start: number,
-    end: number = start
+    end: number = start,
   ) {
     if (end > start) {
       this.removeStyleFromTo(start, end);
@@ -1034,18 +1078,18 @@ export abstract class ITextBehavior<
   setSelectionStartEndWithShift(
     start: number,
     end: number,
-    newSelection: number
+    newSelection: number,
   ) {
     if (newSelection <= start) {
       if (end === start) {
-        this._selectionDirection = 'left';
-      } else if (this._selectionDirection === 'right') {
-        this._selectionDirection = 'left';
+        this._selectionDirection = LEFT;
+      } else if (this._selectionDirection === RIGHT) {
+        this._selectionDirection = LEFT;
         this.selectionEnd = start;
       }
       this.selectionStart = newSelection;
     } else if (newSelection > start && newSelection < end) {
-      if (this._selectionDirection === 'right') {
+      if (this._selectionDirection === RIGHT) {
         this.selectionEnd = newSelection;
       } else {
         this.selectionStart = newSelection;
@@ -1053,9 +1097,9 @@ export abstract class ITextBehavior<
     } else {
       // newSelection is > selection start and end
       if (end === start) {
-        this._selectionDirection = 'right';
-      } else if (this._selectionDirection === 'left') {
-        this._selectionDirection = 'right';
+        this._selectionDirection = RIGHT;
+      } else if (this._selectionDirection === LEFT) {
+        this._selectionDirection = RIGHT;
         this.selectionStart = end;
       }
       this.selectionEnd = newSelection;

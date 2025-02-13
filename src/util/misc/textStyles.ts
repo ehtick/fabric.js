@@ -1,8 +1,10 @@
+import { reNewline } from '../../constants';
 import type {
   TextStyle,
   TextStyleDeclaration,
 } from '../../shapes/Text/StyledText';
-import { cloneDeep } from '../internals/cloneDeep';
+import { cloneStyles } from '../internals/cloneStyles';
+import { graphemeSplit } from '../lang_string';
 
 export type TextStyleArray = {
   start: number;
@@ -19,7 +21,7 @@ export type TextStyleArray = {
 export const hasStyleChanged = (
   prevStyle: TextStyleDeclaration,
   thisStyle: TextStyleDeclaration,
-  forTextSpans = false
+  forTextSpans = false,
 ) =>
   prevStyle.fill !== thisStyle.fill ||
   prevStyle.stroke !== thisStyle.stroke ||
@@ -45,25 +47,26 @@ export const hasStyleChanged = (
  */
 export const stylesToArray = (
   styles: TextStyle,
-  text: string
+  text: string,
 ): TextStyleArray => {
   const textLines = text.split('\n'),
     stylesArray = [];
   let charIndex = -1,
     prevStyle = {};
   // clone style structure to prevent mutation
-  styles = cloneDeep(styles);
+  styles = cloneStyles(styles);
 
   //loop through each textLine
   for (let i = 0; i < textLines.length; i++) {
+    const chars = graphemeSplit(textLines[i]);
     if (!styles[i]) {
       //no styles exist for this line, so add the line's length to the charIndex total and reset prevStyle
-      charIndex += textLines[i].length;
+      charIndex += chars.length;
       prevStyle = {};
       continue;
     }
     //loop through each character of the current line
-    for (let c = 0; c < textLines[i].length; c++) {
+    for (let c = 0; c < chars.length; c++) {
       charIndex++;
       const thisStyle = styles[i][c];
       //check if style exists for this character
@@ -95,23 +98,22 @@ export const stylesToArray = (
  */
 export const stylesFromArray = (
   styles: TextStyleArray | TextStyle,
-  text: string
+  text: string,
 ): TextStyle => {
   if (!Array.isArray(styles)) {
     // clone to prevent mutation
-    return cloneDeep(styles);
+    return cloneStyles(styles);
   }
-  const textLines = text.split('\n'),
-    stylesObject = {} as Record<
-      string | number,
-      Record<string | number, Record<string, string>>
-    >;
+  const textLines = text.split(reNewline),
+    stylesObject: TextStyle = {};
   let charIndex = -1,
     styleIndex = 0;
   //loop through each textLine
   for (let i = 0; i < textLines.length; i++) {
+    const chars = graphemeSplit(textLines[i]);
+
     //loop through each character of the current line
-    for (let c = 0; c < textLines[i].length; c++) {
+    for (let c = 0; c < chars.length; c++) {
       charIndex++;
       //check if there's a style collection that includes the current character
       if (

@@ -1,4 +1,4 @@
-import type { TColorArg } from '../../color/Color';
+import type { TColorArg } from '../../color/typedefs';
 
 export type AnimationState = 'pending' | 'running' | 'completed' | 'aborted';
 
@@ -12,7 +12,7 @@ export type AnimationState = 'pending' | 'running' | 'completed' | 'aborted';
 export type TOnAnimationChangeCallback<T, R = void> = (
   value: T,
   valueProgress: number,
-  durationProgress: number
+  durationProgress: number,
 ) => R;
 
 /**
@@ -23,7 +23,7 @@ export type TAbortCallback<T> = TOnAnimationChangeCallback<T, boolean>;
 
 /**
  * An easing function used to calculate the current value
- * @see {@link AnimationBase['calculate']}
+ * @see {@link AnimationBase#calculate}
  *
  * @param timeElapsed ms elapsed since start
  * @param startValue
@@ -37,13 +37,13 @@ export type TEasingFunction<T = unknown> = T extends number[]
       startValue: number,
       byValue: number,
       duration: number,
-      index: number
+      index: number,
     ) => number
   : (
       timeElapsed: number,
       startValue: number,
       byValue: number,
-      duration: number
+      duration: number,
     ) => number;
 
 export type TAnimationBaseOptions<T> = {
@@ -132,5 +132,5 @@ export type AnimationOptions<T extends number | number[] | TColorArg> =
   T extends TColorArg
     ? ColorAnimationOptions
     : T extends number[]
-    ? ArrayAnimationOptions
-    : ValueAnimationOptions;
+      ? ArrayAnimationOptions
+      : ValueAnimationOptions;

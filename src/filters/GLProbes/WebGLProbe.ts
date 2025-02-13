@@ -1,4 +1,6 @@
-import { GLPrecision, GLProbe } from './GLProbe';
+import { log } from '../../util/internals/console';
+import { GLProbe } from './GLProbe';
+import type { GLPrecision } from './GLProbe';
 
 /**
  * Lazy initialize WebGL constants
@@ -14,7 +16,7 @@ export class WebGLProbe extends GLProbe {
    */
   private testPrecision(
     gl: WebGLRenderingContext,
-    precision: GLPrecision
+    precision: GLPrecision,
   ): boolean {
     const fragmentSource = `precision ${precision} float;\nvoid main(){}`;
     const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
@@ -33,10 +35,11 @@ export class WebGLProbe extends GLProbe {
     const gl = canvas.getContext('webgl');
     if (gl) {
       this.maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
-      this.GLPrecision = Object.values(GLPrecision).find((precision) =>
-        this.testPrecision(gl, precision)
+      this.GLPrecision = (['highp', 'mediump', 'lowp'] as const).find(
+        (precision) => this.testPrecision(gl, precision),
       );
-      console.log(`fabric: max texture size ${this.maxTextureSize}`);
+      gl.getExtension('WEBGL_lose_context')!.loseContext();
+      log('log', `WebGL: max texture size ${this.maxTextureSize}`);
     }
   }
 

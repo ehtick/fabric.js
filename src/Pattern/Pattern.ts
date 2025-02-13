@@ -1,6 +1,6 @@
 import { config } from '../config';
 import type { Abortable, TCrossOrigin, TMat2D, TSize } from '../typedefs';
-import { ifNaN } from '../util/internals';
+import { ifNaN } from '../util/internals/ifNaN';
 import { uid } from '../util/internals/uid';
 import { loadImage } from '../util/misc/objectEnlive';
 import { pick } from '../util/misc/pick';
@@ -11,16 +11,19 @@ import type {
   PatternOptions,
   SerializedPatternOptions,
 } from './types';
+import { log } from '../util/internals/console';
 
 /**
  * @see {@link http://fabricjs.com/patterns demo}
  * @see {@link http://fabricjs.com/dynamic-patterns demo}
  */
 export class Pattern {
+  static type = 'Pattern';
+
   /**
-   * Legacy identifier of the class. Prefer using this.constructor.name 'Pattern'
-   * or utils like isPattern
-   * Will be removed in fabric 7 or 8.
+   * Legacy identifier of the class. Prefer using this.constructor.type 'Pattern'
+   * or utils like isPattern, or instance of to indentify a pattern in your code.
+   * Will be removed in future versiones
    * @TODO add sustainable warning message
    * @type string
    * @deprecated
@@ -30,7 +33,7 @@ export class Pattern {
   }
 
   set type(value) {
-    console.warn('Setting type has no effect', value);
+    log('warn', 'Setting type has no effect', value);
   }
 
   /**
@@ -65,7 +68,7 @@ export class Pattern {
    * @type Array
    * @default
    */
-  patternTransform: TMat2D | null = null;
+  declare patternTransform?: TMat2D;
 
   /**
    * The actual pixel source of the pattern
@@ -89,7 +92,7 @@ export class Pattern {
    * @param {Object} [options] Options object
    * @param {option.source} [source] the pattern source, eventually empty or a drawable
    */
-  constructor(options: PatternOptions = {}) {
+  constructor(options: PatternOptions) {
     this.id = uid();
     Object.assign(this, options);
   }
@@ -114,8 +117,8 @@ export class Pattern {
     return this.isImageSource()
       ? this.source.src
       : this.isCanvasSource()
-      ? this.source.toDataURL()
-      : '';
+        ? this.source.toDataURL()
+        : '';
   }
 
   /**
@@ -171,16 +174,24 @@ export class Pattern {
       patternWidth =
         repeat === 'repeat-y' || repeat === 'no-repeat'
           ? 1 + Math.abs(patternOffsetX || 0)
-          : ifNaN((patternSource.width as number) / width, 0),
+          : ifNaN(
+              ((patternSource as HTMLImageElement).width as number) / width,
+              0,
+            ),
       patternHeight =
         repeat === 'repeat-x' || repeat === 'no-repeat'
           ? 1 + Math.abs(patternOffsetY || 0)
-          : ifNaN((patternSource.height as number) / height, 0);
+          : ifNaN(
+              ((patternSource as HTMLImageElement).height as number) / height,
+              0,
+            );
 
     return [
       `<pattern id="SVGID_${id}" x="${patternOffsetX}" y="${patternOffsetY}" width="${patternWidth}" height="${patternHeight}">`,
-      `<image x="0" y="0" width="${patternSource.width}" height="${
-        patternSource.height
+      `<image x="0" y="0" width="${
+        (patternSource as HTMLImageElement).width
+      }" height="${
+        (patternSource as HTMLImageElement).height
       }" xlink:href="${this.sourceToString()}"></image>`,
       `</pattern>`,
       '',
@@ -189,14 +200,24 @@ export class Pattern {
   /* _TO_SVG_END_ */
 
   static async fromObject(
-    { source, ...serialized }: SerializedPatternOptions,
-    options: Abortable
+    {
+      type,
+      source,
+      patternTransform,
+      ...otherOptions
+    }: SerializedPatternOptions,
+    options?: Abortable,
   ): Promise<Pattern> {
     const img = await loadImage(source, {
       ...options,
-      crossOrigin: serialized.crossOrigin,
+      crossOrigin: otherOptions.crossOrigin,
     });
-    return new this({ ...serialized, source: img });
+    return new this({
+      ...otherOptions,
+      patternTransform:
+        patternTransform && (patternTransform.slice(0) as TMat2D),
+      source: img,
+    });
   }
 }
 

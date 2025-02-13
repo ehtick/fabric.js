@@ -1,17 +1,15 @@
 import { SHARED_ATTRIBUTES } from '../parser/attributes';
 import { parseAttributes } from '../parser/parseAttributes';
-import type { TClassProperties } from '../typedefs';
+import type { Abortable, TClassProperties, TOptions } from '../typedefs';
 import { classRegistry } from '../ClassRegistry';
 import { FabricObject, cacheProperties } from './Object/FabricObject';
 import { Point } from '../Point';
-import { isFiller } from '../util/types';
-import type {
-  FabricObjectProps,
-  SerializedObjectProps,
-  TProps,
-} from './Object/types';
+import { isFiller } from '../util/typeAssertions';
+import type { FabricObjectProps, SerializedObjectProps } from './Object/types';
 import type { ObjectEvents } from '../EventTypeDefs';
 import { makeBoundingBoxFromPoints } from '../util';
+import { CENTER, LEFT, TOP } from '../constants';
+import type { CSSRules } from '../parser/typedefs';
 
 // @TODO this code is terrible and Line should be a special case of polyline.
 
@@ -29,9 +27,9 @@ export interface SerializedLineProps
     UniqueLineProps {}
 
 export class Line<
-    Props extends TProps<FabricObjectProps> = Partial<FabricObjectProps>,
+    Props extends TOptions<FabricObjectProps> = Partial<FabricObjectProps>,
     SProps extends SerializedLineProps = SerializedLineProps,
-    EventSpec extends ObjectEvents = ObjectEvents
+    EventSpec extends ObjectEvents = ObjectEvents,
   >
   extends FabricObject<Props, SProps, EventSpec>
   implements UniqueLineProps
@@ -64,6 +62,8 @@ export class Line<
    */
   declare y2: number;
 
+  static type = 'Line';
+
   static cacheProperties = [...cacheProperties, ...coordProps];
   /**
    * Constructor
@@ -71,12 +71,18 @@ export class Line<
    * @param {Object} [options] Options object
    * @return {Line} thisArg
    */
-  constructor([x1, y1, x2, y2] = [0, 0, 0, 0], options: Props = {} as Props) {
-    super({ ...options, x1, y1, x2, y2 });
+  constructor([x1, y1, x2, y2] = [0, 0, 0, 0], options: Partial<Props> = {}) {
+    super();
+    Object.assign(this, Line.ownDefaults);
+    this.setOptions(options);
+    this.x1 = x1;
+    this.x2 = x2;
+    this.y1 = y1;
+    this.y2 = y2;
     this._setWidthHeight();
     const { left, top } = options;
-    typeof left === 'number' && this.set('left', left);
-    typeof top === 'number' && this.set('top', top);
+    typeof left === 'number' && this.set(LEFT, left);
+    typeof top === 'number' && this.set(TOP, top);
   }
 
   /**
@@ -92,7 +98,7 @@ export class Line<
       { x: x2, y: y2 },
     ]);
     const position = new Point(left + width / 2, top + height / 2);
-    this.setPositionByOrigin(position, 'center', 'center');
+    this.setPositionByOrigin(position, CENTER, CENTER);
   }
 
   /**
@@ -158,7 +164,7 @@ export class Line<
    */
   toObject<
     T extends Omit<Props & TClassProperties<this>, keyof SProps>,
-    K extends keyof T = never
+    K extends keyof T = never,
   >(propertiesToInclude: K[] = []): Pick<T, K> & SProps {
     return {
       ...super.toObject(propertiesToInclude),
@@ -235,18 +241,22 @@ export class Line<
    * Returns Line instance from an SVG element
    * @static
    * @memberOf Line
-   * @param {SVGElement} element Element to parse
+   * @param {HTMLElement} element Element to parse
    * @param {Object} [options] Options object
    * @param {Function} [callback] callback function invoked after parsing
    */
-  static async fromElement(element: SVGElement) {
+  static async fromElement(
+    element: HTMLElement,
+    options: Abortable,
+    cssRules?: CSSRules,
+  ) {
     const {
       x1 = 0,
       y1 = 0,
       x2 = 0,
       y2 = 0,
       ...parsedAttributes
-    } = parseAttributes(element, this.ATTRIBUTE_NAMES);
+    } = parseAttributes(element, this.ATTRIBUTE_NAMES, cssRules);
     return new this([x1, y1, x2, y2], parsedAttributes);
   }
 
@@ -259,7 +269,7 @@ export class Line<
    * @param {Object} object Object to create an instance from
    * @returns {Promise<Line>}
    */
-  static fromObject<T extends TProps<SerializedLineProps>>({
+  static fromObject<T extends TOptions<SerializedLineProps>>({
     x1,
     y1,
     x2,
@@ -273,7 +283,7 @@ export class Line<
       },
       {
         extraParam: 'points',
-      }
+      },
     );
   }
 }

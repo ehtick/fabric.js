@@ -1,9 +1,8 @@
 export type TEventCallback<T = any> = (options: T) => any;
 
-type EventRegistryObject<
-  K extends string | number | symbol = string,
-  E = any
-> = Record<K, TEventCallback<E>>;
+type EventRegistryObject<E> = {
+  [K in keyof E]?: TEventCallback<E[K]>;
+};
 
 /**
  * @tutorial {@link http://fabricjs.com/fabric-intro-part-2#events}
@@ -23,27 +22,21 @@ export class Observable<EventSpec> {
    */
   on<K extends keyof EventSpec, E extends EventSpec[K]>(
     eventName: K,
-    handler: TEventCallback<E>
+    handler: TEventCallback<E>,
   ): VoidFunction;
-  on<K extends string, E>(
-    eventName: K,
-    handler: TEventCallback<E>
-  ): VoidFunction;
+  on(handlers: EventRegistryObject<EventSpec>): VoidFunction;
   on<K extends keyof EventSpec, E extends EventSpec[K]>(
-    handlers: EventRegistryObject<K, E>
-  ): VoidFunction;
-  on<K extends keyof EventSpec, E extends EventSpec[K]>(
-    arg0: K | EventRegistryObject<K, E>,
-    handler?: TEventCallback<E>
+    arg0: K | EventRegistryObject<EventSpec>,
+    handler?: TEventCallback<E>,
   ): VoidFunction {
     if (!this.__eventListeners) {
       this.__eventListeners = {} as Record<keyof EventSpec, TEventCallback[]>;
     }
     if (typeof arg0 === 'object') {
       // one object with key/value pairs was passed
-      for (const eventName in arg0) {
-        this.on(eventName as K, arg0[eventName]);
-      }
+      Object.entries(arg0).forEach(([eventName, handler]) => {
+        this.on(eventName as K, handler as TEventCallback);
+      });
       return () => this.off(arg0);
     } else if (handler) {
       const eventName = arg0;
@@ -68,31 +61,28 @@ export class Observable<EventSpec> {
    */
   once<K extends keyof EventSpec, E extends EventSpec[K]>(
     eventName: K,
-    handler: TEventCallback<E>
+    handler: TEventCallback<E>,
   ): VoidFunction;
-  once<K extends string, E>(
-    eventName: K,
-    handler: TEventCallback<E>
-  ): VoidFunction;
+  once(handlers: EventRegistryObject<EventSpec>): VoidFunction;
   once<K extends keyof EventSpec, E extends EventSpec[K]>(
-    handlers: EventRegistryObject<K, E>
-  ): VoidFunction;
-  once<K extends keyof EventSpec, E extends EventSpec[K]>(
-    arg0: K | EventRegistryObject<K, E>,
-    handler?: TEventCallback<E>
+    arg0: K | EventRegistryObject<EventSpec>,
+    handler?: TEventCallback<E>,
   ): VoidFunction {
     if (typeof arg0 === 'object') {
       // one object with key/value pairs was passed
       const disposers: VoidFunction[] = [];
-      for (const eventName in arg0) {
-        disposers.push(this.once(eventName as K, arg0[eventName]));
-      }
+      Object.entries(arg0).forEach(([eventName, handler]) => {
+        disposers.push(this.once(eventName as K, handler as TEventCallback));
+      });
       return () => disposers.forEach((d) => d());
     } else if (handler) {
-      const disposer = this.on<K, E>(arg0, (...args) => {
-        handler(...args);
-        disposer();
-      });
+      const disposer = this.on<K, E>(
+        arg0,
+        function onceHandler(this: Observable<EventSpec>, ...args) {
+          handler.call(this, ...args);
+          disposer();
+        },
+      );
       return disposer;
     } else {
       // noop
@@ -107,7 +97,7 @@ export class Observable<EventSpec> {
    */
   private _removeEventListener<K extends keyof EventSpec>(
     eventName: K,
-    handler?: TEventCallback
+    handler?: TEventCallback,
   ) {
     if (!this.__eventListeners[eventName]) {
       return;
@@ -123,6 +113,14 @@ export class Observable<EventSpec> {
   }
 
   /**
+   * Unsubscribe all event listeners for eventname.
+   * Do not use this pattern. You could kill internal fabricJS events.
+   * We know we should have protected events for internal flows, but we don't have yet
+   * @deprecated
+   * @param {string} eventName event name (eg. 'after:render')
+   */
+  off<K extends keyof EventSpec>(eventName: K): void;
+  /**
    * unsubscribe an event listener
    * @param {string} eventName event name (eg. 'after:render')
    * @param {TEventCallback} handler event listener to unsubscribe
@@ -132,14 +130,14 @@ export class Observable<EventSpec> {
    * unsubscribe event listeners
    * @param handlers handlers key/value pairs (eg. {'after:render': handler, 'selection:cleared': handler})
    */
-  off(handlers: EventRegistryObject): void;
+  off(handlers: EventRegistryObject<EventSpec>): void;
   /**
    * unsubscribe all event listeners
    */
   off(): void;
   off<K extends keyof EventSpec>(
-    arg0?: K | EventRegistryObject,
-    handler?: TEventCallback
+    arg0?: K | EventRegistryObject<EventSpec>,
+    handler?: TEventCallback,
   ) {
     if (!this.__eventListeners) {
       return;
@@ -153,9 +151,9 @@ export class Observable<EventSpec> {
     }
     // one object with key/value pairs was passed
     else if (typeof arg0 === 'object') {
-      for (const eventName in arg0) {
-        this._removeEventListener(eventName as K, arg0[eventName]);
-      }
+      Object.entries(arg0).forEach(([eventName, handler]) => {
+        this._removeEventListener(eventName as K, handler as TEventCallback);
+      });
     } else {
       this._removeEventListener(arg0, handler);
     }

@@ -2,16 +2,11 @@ import type { Point } from '../Point';
 import { Group } from '../shapes/Group';
 import { Shadow } from '../Shadow';
 import { Rect } from '../shapes/Rect';
-import { getRandomInt } from '../util/internals';
+import { getRandomInt } from '../util/internals/getRandomInt';
 import type { Canvas } from '../canvas/Canvas';
 import { BaseBrush } from './BaseBrush';
-
-export type SprayBrushPoint = {
-  x: number;
-  y: number;
-  width: number;
-  opacity: number;
-};
+import type { SprayBrushPoint } from './typedefs';
+import { CENTER } from '../constants';
 
 /**
  *
@@ -134,8 +129,8 @@ export class SprayBrush extends BaseBrush {
           height: chunck.width,
           left: chunck.x + 1,
           top: chunck.y + 1,
-          originX: 'center',
-          originY: 'center',
+          originX: CENTER,
+          originY: CENTER,
           fill: this.color,
         });
         rects.push(rect);
@@ -146,10 +141,9 @@ export class SprayBrush extends BaseBrush {
       this.optimizeOverlapping ? getUniqueRects(rects) : rects,
       {
         objectCaching: true,
-        layout: 'fixed',
         subTargetCheck: false,
         interactive: false,
-      }
+      },
     );
     this.shadow && group.set('shadow', new Shadow(this.shadow));
     this.canvas.fire('before:path:created', { path: group });
@@ -207,7 +201,7 @@ export class SprayBrush extends BaseBrush {
           ? getRandomInt(
               // bottom clamp width to 1
               Math.max(1, this.dotWidth - this.dotWidthVariance),
-              this.dotWidth + this.dotWidthVariance
+              this.dotWidth + this.dotWidthVariance,
             )
           : this.dotWidth,
         opacity: this.randomOpacity ? getRandomInt(0, 100) / 100 : 1,

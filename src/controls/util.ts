@@ -13,6 +13,7 @@ import {
   radiansToDegrees,
 } from '../util/misc/radiansDegreesConversion';
 import type { Control } from './Control';
+import { CENTER } from '../constants';
 
 export const NOT_ALLOWED_CURSOR = 'not-allowed';
 
@@ -24,9 +25,9 @@ export const NOT_ALLOWED_CURSOR = 'not-allowed';
  */
 export const getActionFromCorner = (
   alreadySelected: boolean,
-  corner: string,
+  corner: string | undefined,
   e: TPointerEvent,
-  target: FabricObject
+  target: FabricObject,
 ) => {
   if (!corner || !alreadySelected) {
     return 'drag';
@@ -41,7 +42,10 @@ export const getActionFromCorner = (
  * @return {Boolean} true if transform is centered
  */
 export function isTransformCentered(transform: Transform) {
-  return transform.originX === 'center' && transform.originY === 'center';
+  return (
+    resolveOrigin(transform.originX) === resolveOrigin(CENTER) &&
+    resolveOrigin(transform.originY) === resolveOrigin(CENTER)
+  );
 }
 
 export function invertOrigin(origin: TOriginX | TOriginY) {
@@ -58,7 +62,7 @@ export const isLocked = (
     | 'lockScalingY'
     | 'lockSkewingX'
     | 'lockSkewingY'
-    | 'lockScalingFlip'
+    | 'lockScalingFlip',
 ) => target[lockingKey];
 
 export const commonEventInfo: TransformAction<
@@ -81,8 +85,8 @@ export const commonEventInfo: TransformAction<
  */
 export function findCornerQuadrant(
   fabricObject: FabricObject,
-  control: Control
-) {
+  control: Control,
+): number {
   //  angle is relative to canvas plane
   const angle = fabricObject.getTotalAngle(),
     cornerAngle =
@@ -97,17 +101,17 @@ function normalizePoint(
   target: FabricObject,
   point: Point,
   originX: TOriginX,
-  originY: TOriginY
+  originY: TOriginY,
 ): Point {
   const center = target.getRelativeCenterPoint(),
     p =
       typeof originX !== 'undefined' && typeof originY !== 'undefined'
         ? target.translateToGivenOrigin(
             center,
-            'center',
-            'center',
+            CENTER,
+            CENTER,
             originX,
-            originY
+            originY,
           )
         : new Point(target.left, target.top),
     p2 = target.angle
@@ -130,7 +134,7 @@ export function getLocalPoint(
   originX: TOriginX,
   originY: TOriginY,
   x: number,
-  y: number
+  y: number,
 ) {
   const control = target.controls[corner],
     zoom = target.canvas?.getZoom() || 1,
