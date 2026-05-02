@@ -58,7 +58,12 @@ export {
   parseUnit,
   getSvgAttributes,
 } from './misc/svgParsing';
-export { matrixToSVG } from './misc/svgExport';
+export {
+  getSafeSvgStyleNumber,
+  getSafeSvgStyleToken,
+  isSafeSvgStyleValue,
+  matrixToSVG,
+} from './misc/svgExport';
 export { groupSVGElements } from './misc/groupSVGElements';
 export { findScaleToFit, findScaleToCover } from './misc/findScaleTo';
 export { capValue } from './misc/capValue';
